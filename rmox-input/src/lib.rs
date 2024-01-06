@@ -19,7 +19,7 @@
 use std::sync::mpsc::{Receiver, SyncSender};
 
 use enumset::{EnumSet, EnumSetType};
-use evdev::{AbsoluteAxisType, Device, EventType, InputEventKind};
+use evdev::{AbsoluteAxisType, Device, EventType, FetchEventsSynced, InputEventKind};
 
 pub use crate::key::{Key, Scancode};
 use crate::layout::{DefaultLayout, KeyboardLayout, Resolved};
@@ -147,42 +147,36 @@ fn detect_device_type(device: &Device) -> Option<SupportedDeviceType> {
 	None
 }
 
-// TODO: Unify this duplicated code.
-fn handle_keyboard(device: &mut Device, events_send: &SyncSender<InternalEvent>) {
-	loop {
-		let events = match device.fetch_events() {
-			Ok(events) => events,
-			Err(error) => match error.raw_os_error() {
-				// `errno` for "No such device". The device was disconnected.
-				Some(19) => break,
-				_ => panic!("{error}"),
-			},
+fn handle_keyboard(
+	events: FetchEventsSynced<'_>,
+	events_send: &SyncSender<InternalEvent>,
+) -> Result<(), ()> {
+	for event in events {
+		let InputEventKind::Key(key) = event.kind() else {
+			continue;
 		};
-		for event in events {
-			let InputEventKind::Key(key) = event.kind() else {
-				continue;
-			};
-			let Some(key) = Scancode::from_evdev(key) else {
-				continue;
-			};
-			let event = match event.value() {
-				0 => KeyEventKind::Release,
-				1 => KeyEventKind::Press,
-				2 => KeyEventKind::Repeat,
-				_ => continue,
-			};
-			let event = InternalEvent::Key {
-				scancode: key,
-				event,
-			};
-			if events_send.send(event).is_err() {
-				break;
-			}
-		}
+		let Some(key) = Scancode::from_evdev(key) else {
+			continue;
+		};
+		let event = match event.value() {
+			0 => KeyEventKind::Release,
+			1 => KeyEventKind::Press,
+			2 => KeyEventKind::Repeat,
+			_ => continue,
+		};
+		let event = InternalEvent::Key {
+			scancode: key,
+			event,
+		};
+		events_send.send(event).map_err(|_| ())?;
 	}
+	Ok(())
 }
 
-fn handle_touchscreen(device: &mut Device, events_send: &SyncSender<InternalEvent>) {
+fn handle_touchscreen(
+	events: FetchEventsSynced<'_>,
+	events_send: &SyncSender<InternalEvent>,
+) -> Result<(), ()> {
 	/*
 	loop {
 		let events = match device.fetch_events() {
@@ -208,18 +202,39 @@ fn handle_touchscreen(device: &mut Device, events_send: &SyncSender<InternalEven
 		}
 	}
 	*/
-	handle_todo(device, events_send, SupportedDeviceType::Touchscreen);
+	handle_todo(events, events_send, SupportedDeviceType::Touchscreen)
 }
 
-fn handle_stylus(device: &mut Device, events_send: &SyncSender<InternalEvent>) {
-	handle_todo(device, events_send, SupportedDeviceType::Stylus);
+fn handle_stylus(
+	events: FetchEventsSynced<'_>,
+	events_send: &SyncSender<InternalEvent>,
+) -> Result<(), ()> {
+	handle_todo(events, events_send, SupportedDeviceType::Stylus)
 }
 
 fn handle_todo(
-	device: &mut Device,
+	events: FetchEventsSynced<'_>,
 	events_send: &SyncSender<InternalEvent>,
 	type_: SupportedDeviceType,
+) -> Result<(), ()> {
+	let events = events
+		.filter(|event| event.event_type() != evdev::EventType::SYNCHRONIZATION)
+		.map(|event| (type_, event.kind(), event.value()))
+		.collect::<Vec<_>>();
+	let event = InternalEvent::Unknown(Box::new(events));
+	events_send.send(event).map_err(|_| ())
+}
+
+fn handle_device(
+	type_: SupportedDeviceType,
+	device: &mut Device,
+	events_send: &SyncSender<InternalEvent>,
 ) {
+	let handler = match type_ {
+		SupportedDeviceType::Keyboard | SupportedDeviceType::Buttons => handle_keyboard,
+		SupportedDeviceType::Touchscreen => handle_touchscreen,
+		SupportedDeviceType::Stylus => handle_stylus,
+	};
 	loop {
 		let events = match device.fetch_events() {
 			Ok(events) => events,
@@ -229,28 +244,9 @@ fn handle_todo(
 				_ => panic!("{error}"),
 			},
 		};
-		let events = events
-			.filter(|event| event.event_type() != evdev::EventType::SYNCHRONIZATION)
-			.map(|event| (type_, event.kind(), event.value()))
-			.collect::<Vec<_>>();
-		let event = InternalEvent::Unknown(Box::new(events));
-		if events_send.send(event).is_err() {
+		if handler(events, events_send).is_err() {
 			break;
 		}
-	}
-}
-
-fn handle_device(
-	type_: SupportedDeviceType,
-	device: &mut Device,
-	events_send: &SyncSender<InternalEvent>,
-) {
-	match type_ {
-		SupportedDeviceType::Keyboard | SupportedDeviceType::Buttons => {
-			handle_keyboard(device, events_send);
-		}
-		SupportedDeviceType::Touchscreen => handle_touchscreen(device, events_send),
-		SupportedDeviceType::Stylus => handle_stylus(device, events_send),
 	}
 }
 
