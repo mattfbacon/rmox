@@ -1,0 +1,3 @@
+[workspace]
+members = ["rmox-fb", "rmox-input", "testing"]
+resolver = "2"

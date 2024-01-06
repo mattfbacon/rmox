@@ -1,0 +1,11 @@
+[package]
+name = "rmox-fb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+embedded-graphics-core = "0.4"
+libc = "0.2"
+memmap2 = "0.9"
+tracing = "0.1"
