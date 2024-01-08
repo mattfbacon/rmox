@@ -17,6 +17,7 @@
 // TODO: Clean up panics and unwraps.
 
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::mpsc::{Receiver, SyncSender};
 
 use embedded_graphics_core::geometry::Point;
@@ -95,8 +96,9 @@ pub enum Event {
 		button: Button,
 		pressed: bool,
 	},
-	KeyboardPresence {
-		connected: bool,
+	DevicePresence {
+		device: SupportedDeviceType,
+		present: bool,
 	},
 	Touch {
 		id: TouchId,
@@ -126,6 +128,10 @@ enum InternalEvent {
 		event: KeyEventKind,
 	},
 	Touchscreen(Box<[InternalTouchscreenEvent]>),
+	DevicePresence {
+		device: SupportedDeviceType,
+		present: bool,
+	},
 	// A temporary monkey patch.
 	Unknown(Box<dyn std::fmt::Debug + Send>),
 }
@@ -220,6 +226,8 @@ pub struct Input {
 	events_recv: Receiver<InternalEvent>,
 	out_queue: VecDeque<Event>,
 
+	device_presence: [bool; SupportedDeviceType::ALL.len()],
+
 	keyboard_layout: Box<dyn KeyboardLayout>,
 	modifiers: Modifiers,
 	/// This is a map from `Scancode` to `Option<Key>`.
@@ -231,8 +239,21 @@ pub struct Input {
 	touch_states: TouchStates,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum SupportedDeviceType {
+macro_rules! device_types {
+	($($variant:ident,)*) => {
+		#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+		#[non_exhaustive]
+		pub enum SupportedDeviceType {
+			$($variant,)*
+		}
+
+		impl SupportedDeviceType {
+			pub const ALL: &'static [Self] = &[$(Self::$variant,)*];
+		}
+	};
+}
+
+device_types! {
 	Stylus,
 	Buttons,
 	Touchscreen,
@@ -362,6 +383,7 @@ fn handle_device(
 		SupportedDeviceType::Touchscreen => handle_touchscreen,
 		SupportedDeviceType::Stylus => handle_stylus,
 	};
+
 	loop {
 		let events = match device.fetch_events() {
 			Ok(events) => events,
@@ -371,35 +393,84 @@ fn handle_device(
 				_ => panic!("{error}"),
 			},
 		};
-		if handler(events, events_send).is_err() {
+		let res = handler(events, events_send);
+		if res.is_err() {
 			return;
 		}
 	}
+
 	tracing::debug!(device=?device.name().unwrap(), ?type_, "device disconnected");
+	_ = events_send.send(InternalEvent::DevicePresence {
+		device: type_,
+		present: false,
+	});
+}
+
+fn autodetect_device(
+	path: &Path,
+	mut device: Device,
+	events_send: &SyncSender<InternalEvent>,
+) -> Result<(), ()> {
+	let type_ = detect_device_type(&device);
+	let name = device.name().unwrap();
+
+	tracing::debug!(?path, ?name, ?type_, "auto-detecting device");
+	if let Some(type_) = type_ {
+		tracing::debug!(device=?name, ?type_, "device connected");
+		events_send
+			.send(InternalEvent::DevicePresence {
+				device: type_,
+				present: true,
+			})
+			.map_err(|_| ())?;
+
+		let events_send = events_send.clone();
+		// TODO: Consider using something like `select` instead of threads.
+		std::thread::spawn(move || handle_device(type_, &mut device, &events_send));
+	}
+
+	Ok(())
 }
 
 impl Input {
-	pub fn new() -> std::io::Result<Self> {
-		tracing::debug!("Input::new, discovering devices");
+	pub fn open() -> std::io::Result<Self> {
+		tracing::debug!("Input::new, performing initial enumeration");
 
-		let (events_send, events_recv) = std::sync::mpsc::sync_channel(4);
+		let (events_send, events_recv) = std::sync::mpsc::sync_channel(8);
 
-		for (path, mut device) in evdev::enumerate() {
-			let type_ = detect_device_type(&device);
-			let name = device.name().expect("device is missing name");
-			tracing::debug!("device path={path:?} name={name:?} type={type_:?}");
-			if let Some(type_) = type_ {
-				let events_send = events_send.clone();
-				// TODO: Consider using something like `select` instead of threads.
-				std::thread::spawn(move || handle_device(type_, &mut device, &events_send));
-			}
+		for (path, device) in evdev::enumerate() {
+			_ = autodetect_device(&path, device, &events_send);
 		}
 
-		// TODO: Use the udev monitor to dynamically create input handler threads when new devices are created.
+		let input_dir = Path::new("/dev/input");
+		let mut inotify = inotify::Inotify::init()?;
+		inotify.watches().add(
+			input_dir,
+			inotify::WatchMask::CREATE | inotify::WatchMask::MOVED_TO,
+		)?;
+		std::thread::spawn(move || {
+			let mut buf = [0u8; 1024];
+			loop {
+				let events = inotify.read_events_blocking(&mut buf).unwrap();
+				for event in events {
+					let Some(name) = event.name else {
+						continue;
+					};
+					let path = input_dir.join(name);
+					tracing::debug!(?path, "new input device");
+					let device = Device::open(&path).unwrap();
+					if autodetect_device(&path, device, &events_send).is_err() {
+						break;
+					}
+				}
+			}
+		});
 
 		Ok(Self {
 			events_recv,
 			out_queue: VecDeque::with_capacity(1),
+
+			device_presence: [false; SupportedDeviceType::ALL.len()],
 
 			keyboard_layout: Box::new(DefaultLayout),
 			modifiers: Modifiers::none(),
@@ -533,10 +604,16 @@ impl Input {
 		}
 	}
 
+	fn process_presence(&mut self, device: SupportedDeviceType, present: bool) {
+		self.device_presence[device as usize] = present;
+		self.enqueue(Event::DevicePresence { device, present });
+	}
+
 	fn process_event(&mut self, event: InternalEvent) {
 		match event {
 			InternalEvent::Key { scancode, event } => self.process_key(scancode, event),
 			InternalEvent::Touchscreen(events) => self.process_touchscreen(&events),
+			InternalEvent::DevicePresence { device, present } => self.process_presence(device, present),
 			InternalEvent::Unknown(data) => self.enqueue(Event::Unknown(data)),
 		}
 	}
@@ -549,10 +626,7 @@ impl Input {
 				return prev_event;
 			}
 
-			let raw = self
-				.events_recv
-				.recv()
-				.expect("all event handler threads crashed");
+			let raw = self.events_recv.recv().expect("all event threads crashed");
 			self.process_event(raw);
 		}
 	}
@@ -572,6 +646,12 @@ impl Input {
 			.touch_states
 			.get(id.0)
 			.expect("invalid TouchId out of bounds of touch_states")
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn device_present(&self, device: SupportedDeviceType) -> bool {
+		self.device_presence[device as usize]
 	}
 }
 
