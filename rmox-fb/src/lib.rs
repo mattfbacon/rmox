@@ -20,7 +20,7 @@ use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::geometry::{Dimensions, OriginDimensions, Point, Size};
 use embedded_graphics_core::pixelcolor::raw::{RawData, RawU16};
 use embedded_graphics_core::pixelcolor::Rgb565;
-use embedded_graphics_core::primitives::Rectangle;
+use embedded_graphics_core::primitives::{PointsIter as _, Rectangle};
 use memmap2::MmapMut;
 
 /// A safe wrapper for an XSI message queue.
@@ -218,25 +218,9 @@ impl FramebufferMapping {
 		bytemuck::cast_slice_mut(&mut self.mapping)
 	}
 
-	#[inline]
-	pub fn set_pixel(&mut self, point: Point, color: Rgb565) {
+	/// Does not bounds-check the point.
+	fn set_pixel(&mut self, point: Point, color: Rgb565) {
 		self.pixels_mut()[Self::point_to_index(point)] = RawU16::from(color).into_inner();
-	}
-
-	#[inline]
-	pub fn set_rect(&mut self, rect: &Rectangle, color: Rgb565) {
-		let color = RawU16::from(color).into_inner();
-		let pixels = self.pixels_mut();
-		for y in rect.rows() {
-			let x_range = rect.columns();
-			let x_range = usize::try_from(x_range.start).unwrap()..usize::try_from(x_range.end).unwrap();
-			pixels[Self::point_to_index(Point { x: 0, y })..][x_range].fill(color);
-		}
-	}
-
-	#[inline]
-	pub fn fill(&mut self, color: Rgb565) {
-		self.pixels_mut().fill(RawU16::from(color).into_inner());
 	}
 }
 
@@ -291,16 +275,51 @@ impl DrawTarget for Framebuffer {
 		Ok(())
 	}
 
-	// TODO: Implement `fill_contiguous`.
+	fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+	where
+		I: IntoIterator<Item = Self::Color>,
+	{
+		let bounds = self.bounding_box();
+		let intersection = bounds.intersection(area);
+
+		let pixels = area
+			.points()
+			.zip(colors)
+			.map(|(pos, color)| embedded_graphics_core::Pixel(pos, color));
+
+		// Only filter if part of `area` is out-of-bounds.
+		if &intersection == area {
+			for pixel in pixels {
+				self.mapping.set_pixel(pixel.0, pixel.1);
+			}
+		} else {
+			let pixels = pixels.into_iter().filter(|pixel| bounds.contains(pixel.0));
+			for pixel in pixels {
+				self.mapping.set_pixel(pixel.0, pixel.1);
+			}
+		}
+
+		Ok(())
+	}
 
 	fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
 		let area = area.intersection(&self.bounding_box());
-		self.mapping.set_rect(&area, color);
+		let color = RawU16::from(color).into_inner();
+		let pixels = self.mapping.pixels_mut();
+		for y in area.rows() {
+			let y_index = FramebufferMapping::point_to_index(Point { x: 0, y });
+			let x_range = area.columns();
+			let x_range = usize::try_from(x_range.start).unwrap()..usize::try_from(x_range.end).unwrap();
+			pixels[y_index..][x_range].fill(color);
+		}
 		Ok(())
 	}
 
 	fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
-		self.mapping.fill(color);
+		self
+			.mapping
+			.pixels_mut()
+			.fill(RawU16::from(color).into_inner());
 		Ok(())
 	}
 }
