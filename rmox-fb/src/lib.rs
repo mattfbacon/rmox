@@ -198,7 +198,7 @@ impl FramebufferMapping {
 		tracing::debug!("open framebuffer mapping");
 
 		let size_bytes = u64::from(Framebuffer::WIDTH * Framebuffer::HEIGHT)
-			* u64::try_from(std::mem::size_of::<Rgb565>()).unwrap();
+			* u64::try_from(std::mem::size_of::<Rgb565>()).unwrap_or_else(|_| unreachable!());
 
 		let file = std::fs::OpenOptions::new()
 			.read(true)

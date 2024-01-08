@@ -188,6 +188,7 @@ struct TouchStates {
 	states: [Option<TouchState>; 32],
 }
 
+#[allow(clippy::derivable_impls)] // Clarity.
 impl Default for TouchStates {
 	fn default() -> Self {
 		Self {
@@ -322,15 +323,13 @@ fn handle_touchscreen(
 				A::ABS_MT_TOUCH_MAJOR => E::TouchMajor(value.try_into().unwrap()),
 				A::ABS_MT_TOUCH_MINOR => E::TouchMinor(value.try_into().unwrap()),
 				A::ABS_MT_ORIENTATION => E::Orientation(value.try_into().unwrap()),
-				// TODO: Determine which events we want to handle and which to ignore. Never panic.
-				_ => panic!("unhandled axis kind {axis:?} (value = {value:?})"),
+				_ => return None,
 			};
 			Some(event)
 		})
 		.collect();
 	let event = InternalEvent::Touchscreen(events);
 	events_send.send(event).map_err(|_| ())
-	// handle_todo(events, events_send, SupportedDeviceType::Touchscreen)
 }
 
 fn handle_stylus(
