@@ -246,8 +246,8 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
-	pub const WIDTH: u32 = 1404;
-	pub const HEIGHT: u32 = 1872;
+	pub const WIDTH: u32 = rmox_common::FB_WIDTH;
+	pub const HEIGHT: u32 = rmox_common::FB_HEIGHT;
 	pub const SIZE: Size = Size {
 		width: Self::WIDTH,
 		height: Self::HEIGHT,
