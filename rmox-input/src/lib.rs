@@ -199,9 +199,9 @@ impl Default for TouchStates {
 }
 
 impl TouchStates {
-	fn current(&mut self) -> (usize, &mut Option<TouchState>) {
+	fn current(&mut self) -> Option<(usize, &mut Option<TouchState>)> {
 		let index = usize::from(self.slot);
-		(index, &mut self.states[index])
+		Some((index, self.states.get_mut(index)?))
 	}
 
 	fn set_slot(&mut self, new: u8) {
@@ -476,7 +476,9 @@ impl Input {
 
 		macro_rules! touch_state {
 			() => {{
-				let (slot, state) = self.touch_states.current();
+				let Some((slot, state)) = self.touch_states.current() else {
+					continue;
+				};
 
 				let change = &mut changes[usize::from(slot)];
 				if state.is_none() {
@@ -493,12 +495,14 @@ impl Input {
 		for &event in events {
 			match event {
 				InternalTouchscreenEvent::Slot(v) => {
-					// TODO: Handle invalid slots.
 					self.touch_states.set_slot(v);
 				}
 				InternalTouchscreenEvent::TouchEnd => {
-					let (slot, state) = self.touch_states.current();
+					let Some((slot, state)) = self.touch_states.current() else {
+						continue;
+					};
 					*state = None;
+
 					let change = &mut changes[slot];
 					*change = if *change == Some(TouchPhase::Start) {
 						None
