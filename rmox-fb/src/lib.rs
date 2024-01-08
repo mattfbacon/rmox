@@ -90,16 +90,23 @@ struct Channel {
 	queue: XsiQueue,
 }
 
+/// How the E-Ink driver will refresh the pixels.
 #[derive(Debug, Clone, Copy)]
 pub enum UpdateStyle {
+	/// A very fast method with minimal ghosting, but only works for black and white.
 	Monochrome,
+	/// A relatively fast method with some ghosting. Works for all colors.
 	Rgb,
+	/// A slow method with no ghosting. Works for all colors.
 	Init,
 }
 
+/// How much the E-Ink driver will try to remove ghosting.
 #[derive(Debug, Clone, Copy)]
 pub enum UpdateDepth {
+	/// A normal and relatively fast update.
 	Partial,
+	/// A longer and more thorough update. Will flash between black and white.
 	Full,
 }
 
@@ -180,21 +187,21 @@ impl Channel {
 	}
 }
 
-pub struct FramebufferMapping {
+struct FramebufferMapping {
 	mapping: MmapMut,
 }
 
 impl FramebufferMapping {
 	const PATH: &'static str = "/dev/shm/swtfb.01";
 
-	#[inline]
+	/// Does not bounds-check the point.
 	#[must_use]
 	fn point_to_index(point: Point) -> usize {
 		usize::try_from(point.y).unwrap() * usize::try_from(Framebuffer::WIDTH).unwrap()
 			+ usize::try_from(point.x).unwrap()
 	}
 
-	pub fn open() -> std::io::Result<Self> {
+	fn open() -> std::io::Result<Self> {
 		tracing::debug!("open framebuffer mapping");
 
 		let size_bytes = u64::from(Framebuffer::WIDTH * Framebuffer::HEIGHT)
@@ -212,7 +219,6 @@ impl FramebufferMapping {
 		Ok(Self { mapping })
 	}
 
-	#[inline]
 	#[must_use]
 	pub fn pixels_mut(&mut self) -> &mut [u16] {
 		bytemuck::cast_slice_mut(&mut self.mapping)
@@ -241,6 +247,11 @@ impl Framebuffer {
 		size: Self::SIZE,
 	};
 
+	/// # Errors
+	///
+	/// - Opening the framebuffer
+	/// - Mapping the framebuffer
+	/// - Getting the rm2fb IPC channel
 	#[inline]
 	pub fn open() -> std::io::Result<Self> {
 		tracing::debug!("open framebuffer");
@@ -249,6 +260,12 @@ impl Framebuffer {
 			mapping: FramebufferMapping::open()?,
 			channel: Channel::open()?,
 		})
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn pixels_mut(&mut self) -> &mut [u16] {
+		self.mapping.pixels_mut()
 	}
 }
 
@@ -325,6 +342,17 @@ impl DrawTarget for Framebuffer {
 }
 
 pub trait EinkUpdate {
+	/// Update `rect` using the specified `style` and `depth`.
+	///
+	/// The `style` determines how the E-Ink driver refreshes the pixels.
+	/// See the [`UpdateStyle`] docs for more info.
+	///
+	/// The `depth` determines how hard the driver tries to remove ghosting.
+	/// See the [`UpdateDepth`] docs for more info.
+	///
+	/// # Errors
+	///
+	/// Writing to the rm2fb IPC channel.
 	fn update(&self, rect: &Rectangle, style: UpdateStyle, depth: UpdateDepth)
 		-> std::io::Result<()>;
 }
@@ -365,14 +393,31 @@ impl<T: EinkUpdate + ?Sized> EinkUpdate for &mut T {
 }
 
 pub trait EinkUpdateExt: EinkUpdate {
+	/// [`EinkUpdate::update`] with [`UpdateDepth::Full`].
+	///
+	/// # Errors
+	///
+	/// Same as [`EinkUpdate::update`].
 	#[inline]
 	fn update_full(&self, area: &Rectangle, style: UpdateStyle) -> std::io::Result<()> {
 		self.update(area, style, UpdateDepth::Full)
 	}
+
+	/// [`EinkUpdate::update`] with [`UpdateDepth::Partial`].
+	///
+	/// # Errors
+	///
+	/// Same as [`EinkUpdate::update`].
 	#[inline]
 	fn update_partial(&self, area: &Rectangle, style: UpdateStyle) -> std::io::Result<()> {
 		self.update(area, style, UpdateDepth::Partial)
 	}
+
+	/// [`EinkUpdate::update`] with the full bounding box of the framebuffer and [`UpdateDepth::Full`].
+	///
+	/// # Errors
+	///
+	/// Same as [`EinkUpdate::update`].
 	#[inline]
 	fn update_all(&self, style: UpdateStyle) -> std::io::Result<()>
 	where

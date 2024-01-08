@@ -445,7 +445,7 @@ fn main() {
 		analog_circle.draw(&mut fb).unwrap();
 	}
 	*/
-	let mut input = rmox_input::Input::new().unwrap();
+	let mut input = rmox_input::Input::open().unwrap();
 
 	let mut fb = Framebuffer::open().expect("open framebuffer");
 

@@ -151,8 +151,9 @@ impl TouchState {
 	#[inline]
 	#[must_use]
 	pub fn position(&self) -> Point {
+		let height = i32::try_from(rmox_common::FB_HEIGHT).unwrap_or_else(|_| unreachable!());
 		// The Y is mirrored relative to the framebuffer.
-		let y = i32::try_from(rmox_common::FB_HEIGHT).unwrap() - i32::from(self.y);
+		let y = height - i32::from(self.y);
 		Point::new(self.x.into(), y)
 	}
 
@@ -211,13 +212,11 @@ impl TouchStates {
 	}
 
 	fn set_slot(&mut self, new: u8) {
-		// TODO: Handle invalid slots.
-		assert!(self.states.get(usize::from(new)).is_some());
 		self.slot = new;
 	}
 
-	fn get(&self, slot: u8) -> Option<Option<TouchState>> {
-		self.states.get(usize::from(slot)).copied()
+	fn get(&self, slot: u8) -> Option<&Option<TouchState>> {
+		self.states.get(usize::from(slot))
 	}
 }
 
@@ -642,7 +641,7 @@ impl Input {
 	pub fn touch_state(&self, id: TouchId) -> Option<TouchState> {
 		// We assert that any `TouchId` will fit within the bounds of our states array,
 		// because its inner field is private and only we construct it.
-		self
+		*self
 			.touch_states
 			.get(id.0)
 			.expect("invalid TouchId out of bounds of touch_states")
