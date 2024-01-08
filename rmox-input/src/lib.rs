@@ -308,7 +308,7 @@ fn handle_touchscreen(
 ) -> Result<(), ()> {
 	use evdev::AbsoluteAxisType as A;
 	use InternalTouchscreenEvent as E;
-	let events = events
+	let events: Box<[E]> = events
 		.filter_map(|event| {
 			let evdev::InputEventKind::AbsAxis(axis) = event.kind() else {
 				return None;
@@ -335,6 +335,9 @@ fn handle_touchscreen(
 			Some(event)
 		})
 		.collect();
+	if events.is_empty() {
+		return Ok(());
+	}
 	let event = InternalEvent::Touchscreen(events);
 	events_send.send(event).map_err(|_| ())
 }
