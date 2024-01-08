@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use embedded_graphics::{Drawable as _, Pixel};
 use rmox_fb::{
 	mut_draw_target, EinkUpdate, EinkUpdateExt as _, Framebuffer, UpdateDepth, UpdateStyle,
 };
-use rmox_input::Event;
+use rmox_input::{Event, TouchPhase};
 use tracing_subscriber::filter::LevelFilter;
 
 struct Traced<T>(T);
@@ -446,8 +447,7 @@ fn main() {
 	*/
 	let mut input = rmox_input::Input::new().unwrap();
 
-	let fb = Framebuffer::open().expect("open framebuffer");
-	let mut fb = Scaled::<_, 5>(Rotate90(fb));
+	let mut fb = Framebuffer::open().expect("open framebuffer");
 
 	let bg = Rgb565::new(31, 63, 31);
 	let fg = Rgb565::new(0, 0, 0);
@@ -456,21 +456,57 @@ fn main() {
 	fb.update_all(UpdateStyle::Init).unwrap();
 	std::thread::sleep(Duration::from_secs(1));
 
-	let mut text_area = TextArea::new(&fonts::FONT_7X14, fg, bg, Point::new(4, 4));
-	writeln!(text_area.writer(&mut fb), "ready").unwrap();
-	text_area
-		.flush_updates(UpdateStyle::Monochrome, &fb)
-		.unwrap();
-
+	let mut last_points = HashMap::new();
+	let thickness = 6;
 	loop {
 		let event = input.next_event();
 		tracing::info!("event: {event:?}");
+		if let Event::Touch { id, phase } = event {
+			/*
+			if let Some(state) = input.touch_state(id) {
+				let point = state.position();
+				let circle = Circle::with_center(point, 6);
+				circle
+					.into_styled(PrimitiveStyleBuilder::new().fill_color(fg).build())
+					.draw(&mut fb)
+					.unwrap();
+				fb.update_partial(&circle.bounding_box(), UpdateStyle::Monochrome)
+					.unwrap();
+			}
+			*/
+			match phase {
+				TouchPhase::Start => {
+					let position = input.touch_state(id).unwrap().position();
+					last_points.insert(id, position);
 
-		if let Event::Text(text) = event {
-			text_area.write(&text, &mut fb).unwrap();
-			text_area
-				.flush_updates(UpdateStyle::Monochrome, &fb)
-				.unwrap();
+					let circle = Circle::with_center(position, thickness);
+					circle
+						.into_styled(PrimitiveStyleBuilder::new().fill_color(fg).build())
+						.draw(&mut fb)
+						.unwrap();
+					fb.update_partial(&circle.bounding_box(), UpdateStyle::Monochrome)
+						.unwrap();
+				}
+				TouchPhase::Change => {
+					let last_pos = last_points[&id];
+					let state = input.touch_state(id).unwrap();
+					let new_pos = state.position();
+					last_points.insert(id, new_pos);
+
+					let line = Line::new(last_pos, new_pos).into_styled(
+						PrimitiveStyleBuilder::new()
+							.stroke_color(fg)
+							.stroke_width((state.pressure() / 5).into())
+							.build(),
+					);
+					line.draw(&mut fb).unwrap();
+					fb.update_partial(&line.bounding_box(), UpdateStyle::Monochrome)
+						.unwrap();
+				}
+				TouchPhase::End => {
+					last_points.remove(&id);
+				}
+			}
 		}
 	}
 }

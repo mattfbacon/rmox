@@ -16,9 +16,10 @@
 #![forbid(unsafe_code)]
 // TODO: Clean up panics and unwraps.
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, SyncSender};
 
-use enumset::{EnumSet, EnumSetType};
+use embedded_graphics_core::geometry::Point;
 use evdev::{AbsoluteAxisType, Device, EventType, FetchEventsSynced, InputEventKind};
 
 pub use crate::key::{Key, Scancode};
@@ -70,6 +71,17 @@ pub enum Button {
 	Power,
 }
 
+// Internal invariant: `self.0` is a valid index into `Input::touch_states`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TouchId(u8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TouchPhase {
+	Start,
+	Change,
+	End,
+}
+
 #[derive(Debug)]
 pub enum Event {
 	Key {
@@ -86,22 +98,126 @@ pub enum Event {
 	KeyboardPresence {
 		connected: bool,
 	},
-	// A temporary monkey patch.
-	Unknown(Box<dyn std::fmt::Debug + Send>),
-}
-
-enum InternalEvent {
-	Key {
-		scancode: Scancode,
-		event: KeyEventKind,
+	Touch {
+		id: TouchId,
+		phase: TouchPhase,
 	},
 	// A temporary monkey patch.
 	Unknown(Box<dyn std::fmt::Debug + Send>),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum InternalTouchscreenEvent {
+	Slot(u8),
+	TouchEnd,
+	PositionX(u16),
+	PositionY(u16),
+	Pressure(u8),
+	Distance(u8),
+	TouchMajor(u8),
+	TouchMinor(u8),
+	Orientation(i8),
+}
+
+#[derive(Debug)]
+enum InternalEvent {
+	Key {
+		scancode: Scancode,
+		event: KeyEventKind,
+	},
+	Touchscreen(Box<[InternalTouchscreenEvent]>),
+	// A temporary monkey patch.
+	Unknown(Box<dyn std::fmt::Debug + Send>),
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TouchState {
+	x: u16,
+	y: u16,
+	pressure: u8,
+	distance: u8,
+	touch_major: u8,
+	touch_minor: u8,
+	orientation: i8,
+}
+
+impl TouchState {
+	#[inline]
+	#[must_use]
+	pub fn position(&self) -> Point {
+		// The Y is mirrored relative to the framebuffer.
+		let y = i32::try_from(rmox_common::FB_HEIGHT).unwrap() - i32::from(self.y);
+		Point::new(self.x.into(), y)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn pressure(&self) -> u8 {
+		self.pressure
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn distance(&self) -> u8 {
+		self.distance
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn touch_major(&self) -> u8 {
+		self.touch_major
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn touch_minor(&self) -> u8 {
+		self.touch_minor
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn orientation(&self) -> i8 {
+		self.orientation
+	}
+}
+
+#[derive(Debug)]
+struct TouchStates {
+	/// Invariant: `states.get(slot).is_some()`.
+	slot: u8,
+	states: [Option<TouchState>; 32],
+}
+
+impl Default for TouchStates {
+	fn default() -> Self {
+		Self {
+			slot: 0,
+			states: [None; 32],
+		}
+	}
+}
+
+impl TouchStates {
+	fn current(&mut self) -> (usize, &mut Option<TouchState>) {
+		let index = usize::from(self.slot);
+		(index, &mut self.states[index])
+	}
+
+	fn set_slot(&mut self, new: u8) {
+		// TODO: Handle invalid slots.
+		assert!(self.states.get(usize::from(new)).is_some());
+		self.slot = new;
+	}
+
+	fn get(&self, slot: u8) -> Option<Option<TouchState>> {
+		self.states.get(usize::from(slot)).copied()
+	}
+}
+
+#[derive(Debug)]
 pub struct Input {
-	events: Receiver<InternalEvent>,
-	extra_event: Option<Event>,
+	events_recv: Receiver<InternalEvent>,
+	out_queue: VecDeque<Event>,
 
 	keyboard_layout: Box<dyn KeyboardLayout>,
 	modifiers: Modifiers,
@@ -109,9 +225,9 @@ pub struct Input {
 	/// Each entry is `Some` iff the key with the given `Scancode` is currently pressed.
 	/// The value indicates which `Key` was reported by the keyboard layout for that `Scancode` when it was pressed (which could depend on modifiers at that time).
 	/// The value here will be reported as `key` for the release event, to ensure that applications see the same `Key` for the press and release regardless of modifier state when the key is released.
-	///
-	/// The array is boxed for size reasons.
-	held_keys: Box<[Option<Key>; Scancode::ALL.len()]>,
+	held_keys: [Option<Key>; Scancode::ALL.len()],
+
+	touch_states: TouchStates,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -177,32 +293,44 @@ fn handle_touchscreen(
 	events: FetchEventsSynced<'_>,
 	events_send: &SyncSender<InternalEvent>,
 ) -> Result<(), ()> {
-	/*
-	loop {
-		let events = match device.fetch_events() {
-			Ok(events) => events,
-			Err(error) => match error.raw_os_error() {
-				// `errno` for "No such device". The device was disconnected.
-				Some(19) => break,
-				_ => panic!("{error}"),
-			},
-		};
-		let mut slot = 0;
-		let mut tracking_id = None;
-		for event in events {
-			let InputEventKind::AbsAxis(axis) = event.kind() else {
-				continue;
+	use evdev::AbsoluteAxisType as A;
+	use InternalTouchscreenEvent as E;
+	let events = events
+		.filter_map(|event| {
+			let evdev::InputEventKind::AbsAxis(axis) = event.kind() else {
+				return None;
 			};
-			match axis {
-				AbsoluteAxisType::ABS_MT_SLOT => {}
-				AbsoluteAxisType::ABS_MT_TRACKING_ID => {
-					tracking_id = Some(tracking_id);
+			let value = event.value();
+			let event = match axis {
+				A::ABS_MT_SLOT => E::Slot(value.try_into().unwrap()),
+				A::ABS_MT_TRACKING_ID => {
+					if value == -1 {
+						E::TouchEnd
+					} else {
+						return None;
+					}
 				}
-			}
-		}
-	}
-	*/
-	handle_todo(events, events_send, SupportedDeviceType::Touchscreen)
+				A::ABS_MT_POSITION_X => E::PositionX(value.try_into().unwrap()),
+				A::ABS_MT_POSITION_Y => E::PositionY(value.try_into().unwrap()),
+				A::ABS_MT_PRESSURE => E::Pressure(value.try_into().unwrap()),
+				A::ABS_MT_DISTANCE => {
+					if value != 0 {
+						eprintln!("distance = {value}");
+					}
+					E::Distance(value.try_into().unwrap())
+				}
+				A::ABS_MT_TOUCH_MAJOR => E::TouchMajor(value.try_into().unwrap()),
+				A::ABS_MT_TOUCH_MINOR => E::TouchMinor(value.try_into().unwrap()),
+				A::ABS_MT_ORIENTATION => E::Orientation(value.try_into().unwrap()),
+				// TODO: Determine which events we want to handle and which to ignore. Never panic.
+				_ => panic!("unhandled axis kind {axis:?} (value = {value:?})"),
+			};
+			Some(event)
+		})
+		.collect();
+	let event = InternalEvent::Touchscreen(events);
+	events_send.send(event).map_err(|_| ())
+	// handle_todo(events, events_send, SupportedDeviceType::Touchscreen)
 }
 
 fn handle_stylus(
@@ -245,9 +373,10 @@ fn handle_device(
 			},
 		};
 		if handler(events, events_send).is_err() {
-			break;
+			return;
 		}
 	}
+	tracing::debug!(device=?device.name().unwrap(), ?type_, "device disconnected");
 }
 
 impl Input {
@@ -270,17 +399,15 @@ impl Input {
 		// TODO: Use the udev monitor to dynamically create input handler threads when new devices are created.
 
 		Ok(Self {
-			events: events_recv,
-			extra_event: None,
+			events_recv,
+			out_queue: VecDeque::with_capacity(1),
+
 			keyboard_layout: Box::new(DefaultLayout),
 			modifiers: Modifiers::none(),
-			held_keys: Box::new([None; Scancode::ALL.len()]),
-		})
-	}
+			held_keys: [None; Scancode::ALL.len()],
 
-	fn set_extra_event(&mut self, event: Event) {
-		debug_assert!(self.extra_event.is_none());
-		self.extra_event = Some(event);
+			touch_states: TouchStates::default(),
+		})
 	}
 
 	fn update_modifier(&mut self, modifier: Modifier, event: KeyEventKind) {
@@ -301,10 +428,14 @@ impl Input {
 		}
 	}
 
-	fn process_key(&mut self, scancode: Scancode, event: KeyEventKind) -> Event {
+	fn enqueue(&mut self, event: Event) {
+		self.out_queue.push_back(event);
+	}
+
+	fn process_key(&mut self, scancode: Scancode, kind: KeyEventKind) {
 		let mut these_modifiers = self.modifiers;
 		// `scancode_to_key` may consume some of `these_modifiers` if they are interpreted as part of a compound keystroke to select an alternative `Key` for the given `Scancode`.
-		let key = if event.release() {
+		let key = if kind.release() {
 			// This could return `None` if the program was started while a physical key was held.
 			// In that case, `key` should be `None` because we don't know what modifiers were active when the physical key was pressed.
 			self.held_keys[scancode as usize].take()
@@ -317,54 +448,127 @@ impl Input {
 			self.held_keys[scancode as usize] = key;
 			key
 		};
+
+		let key_event = Event::Key {
+			scancode,
+			key,
+			event: kind,
+			modifiers: these_modifiers,
+		};
+		self.enqueue(key_event);
+
 		if let Some(key) = key {
 			match self.keyboard_layout.resolve(key, these_modifiers) {
 				Resolved::Modifier(modifier) => {
-					self.update_modifier(modifier, event);
+					self.update_modifier(modifier, kind);
 				}
 				Resolved::Text(text) => {
-					if event.press() {
-						let text_event = Event::Text(text);
-						self.set_extra_event(text_event);
+					if kind.press() {
+						self.out_queue.push_back(Event::Text(text));
 					}
 				}
 				Resolved::NoneOfThese => {}
 			}
 		}
+	}
 
-		Event::Key {
-			scancode,
-			key,
-			event,
-			modifiers: these_modifiers,
+	fn process_touchscreen(&mut self, events: &[InternalTouchscreenEvent]) {
+		let mut changes = [None; 32];
+
+		macro_rules! touch_state {
+			() => {{
+				let (slot, state) = self.touch_states.current();
+
+				let change = &mut changes[usize::from(slot)];
+				if state.is_none() {
+					*change = Some(TouchPhase::Start);
+				} else if *change != Some(TouchPhase::Start) {
+					// This also correctly handles a Start following an End, combining them into a Change.
+					*change = Some(TouchPhase::Change);
+				}
+
+				state.get_or_insert_with(TouchState::default)
+			}};
+		}
+
+		for &event in events {
+			match event {
+				InternalTouchscreenEvent::Slot(v) => {
+					// TODO: Handle invalid slots.
+					self.touch_states.set_slot(v);
+				}
+				InternalTouchscreenEvent::TouchEnd => {
+					let (slot, state) = self.touch_states.current();
+					*state = None;
+					let change = &mut changes[slot];
+					*change = if *change == Some(TouchPhase::Start) {
+						None
+					} else {
+						Some(TouchPhase::End)
+					};
+				}
+				InternalTouchscreenEvent::PositionX(v) => touch_state!().x = v,
+				InternalTouchscreenEvent::PositionY(v) => touch_state!().y = v,
+				InternalTouchscreenEvent::Pressure(v) => touch_state!().pressure = v,
+				InternalTouchscreenEvent::Distance(v) => touch_state!().distance = v,
+				InternalTouchscreenEvent::TouchMajor(v) => touch_state!().touch_major = v,
+				InternalTouchscreenEvent::TouchMinor(v) => touch_state!().touch_minor = v,
+				InternalTouchscreenEvent::Orientation(v) => touch_state!().orientation = v,
+			}
+		}
+
+		for (slot, phase) in changes.into_iter().enumerate() {
+			if let Some(phase) = phase {
+				let event = Event::Touch {
+					// We are using the slot as the ID because, AFAICT, it satisfies the criteria:
+					// it doesn't change for the duration of the contact.
+					id: TouchId(slot.try_into().unwrap()),
+					phase,
+				};
+				self.enqueue(event);
+			}
 		}
 	}
 
-	fn next_event_(&mut self, event: InternalEvent) -> Event {
+	fn process_event(&mut self, event: InternalEvent) {
 		match event {
 			InternalEvent::Key { scancode, event } => self.process_key(scancode, event),
-			InternalEvent::Unknown(data) => Event::Unknown(data),
+			InternalEvent::Touchscreen(events) => self.process_touchscreen(&events),
+			InternalEvent::Unknown(data) => self.enqueue(Event::Unknown(data)),
 		}
 	}
 
 	#[inline]
 	#[must_use]
 	pub fn next_event(&mut self) -> Event {
-		if let Some(prev_event) = self.extra_event.take() {
-			return prev_event;
-		}
+		loop {
+			if let Some(prev_event) = self.out_queue.pop_front() {
+				return prev_event;
+			}
 
-		let raw = self
-			.events
-			.recv()
-			.expect("all event handler threads crashed");
-		self.next_event_(raw)
+			let raw = self
+				.events_recv
+				.recv()
+				.expect("all event handler threads crashed");
+			self.process_event(raw);
+		}
 	}
 
 	#[inline]
 	#[must_use]
 	pub fn modifiers(&self) -> Modifiers {
 		self.modifiers
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn touch_state(&self, id: TouchId) -> Option<TouchState> {
+		// We assert that any `TouchId` will fit within the bounds of our states array,
+		// because its inner field is private and only we construct it.
+		self
+			.touch_states
+			.get(id.0)
+			.expect("invalid TouchId out of bounds of touch_states")
 	}
 }
 
