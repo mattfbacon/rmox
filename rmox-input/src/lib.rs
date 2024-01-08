@@ -115,7 +115,6 @@ enum InternalTouchscreenEvent {
 	PositionX(u16),
 	PositionY(u16),
 	Pressure(u8),
-	Distance(u8),
 	TouchMajor(u8),
 	TouchMinor(u8),
 	Orientation(i8),
@@ -141,7 +140,6 @@ pub struct TouchState {
 	x: u16,
 	y: u16,
 	pressure: u8,
-	distance: u8,
 	touch_major: u8,
 	touch_minor: u8,
 	orientation: i8,
@@ -161,12 +159,6 @@ impl TouchState {
 	#[must_use]
 	pub fn pressure(&self) -> u8 {
 		self.pressure
-	}
-
-	#[inline]
-	#[must_use]
-	pub fn distance(&self) -> u8 {
-		self.distance
 	}
 
 	#[inline]
@@ -334,15 +326,10 @@ fn handle_touchscreen(
 				A::ABS_MT_POSITION_X => E::PositionX(value.try_into().unwrap()),
 				A::ABS_MT_POSITION_Y => E::PositionY(value.try_into().unwrap()),
 				A::ABS_MT_PRESSURE => E::Pressure(value.try_into().unwrap()),
-				A::ABS_MT_DISTANCE => {
-					if value != 0 {
-						eprintln!("distance = {value}");
-					}
-					E::Distance(value.try_into().unwrap())
-				}
 				A::ABS_MT_TOUCH_MAJOR => E::TouchMajor(value.try_into().unwrap()),
 				A::ABS_MT_TOUCH_MINOR => E::TouchMinor(value.try_into().unwrap()),
 				A::ABS_MT_ORIENTATION => E::Orientation(value.try_into().unwrap()),
+				// Although the touchscreen does report `ABS_MT_DISTANCE`, it seems to always be zero, so we ignore it.
 				_ => return None,
 			};
 			Some(event)
@@ -583,7 +570,6 @@ impl Input {
 				InternalTouchscreenEvent::PositionX(v) => touch_state!().x = v,
 				InternalTouchscreenEvent::PositionY(v) => touch_state!().y = v,
 				InternalTouchscreenEvent::Pressure(v) => touch_state!().pressure = v,
-				InternalTouchscreenEvent::Distance(v) => touch_state!().distance = v,
 				InternalTouchscreenEvent::TouchMajor(v) => touch_state!().touch_major = v,
 				InternalTouchscreenEvent::TouchMinor(v) => touch_state!().touch_minor = v,
 				InternalTouchscreenEvent::Orientation(v) => touch_state!().orientation = v,
