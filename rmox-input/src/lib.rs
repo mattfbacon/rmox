@@ -83,6 +83,15 @@ pub enum TouchPhase {
 	End,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum StylusPhase {
+	Hover,
+	Touch,
+	Change,
+	Lift,
+	Leave,
+}
+
 #[derive(Debug)]
 pub enum Event {
 	Key {
@@ -104,8 +113,7 @@ pub enum Event {
 		id: TouchId,
 		phase: TouchPhase,
 	},
-	// A temporary monkey patch.
-	Unknown(Box<dyn std::fmt::Debug + Send>),
+	Stylus(StylusPhase),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +128,35 @@ enum InternalTouchscreenEvent {
 	Orientation(i8),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StylusTool {
+	Pen,
+	Rubber,
+}
+
+impl StylusTool {
+	#[must_use]
+	fn from_evdev(key: evdev::Key) -> Option<Self> {
+		Some(match key {
+			evdev::Key::BTN_TOOL_PEN => Self::Pen,
+			evdev::Key::BTN_TOOL_RUBBER => Self::Rubber,
+			_ => return None,
+		})
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InternalStylusEvent {
+	Tool(Option<StylusTool>),
+	Touch(bool),
+	PositionX(u16),
+	PositionY(u16),
+	Pressure(u16),
+	Distance(u8),
+	TiltX(i16),
+	TiltY(i16),
+}
+
 #[derive(Debug)]
 enum InternalEvent {
 	Key {
@@ -127,12 +164,11 @@ enum InternalEvent {
 		event: KeyEventKind,
 	},
 	Touchscreen(Box<[InternalTouchscreenEvent]>),
+	Stylus(Box<[InternalStylusEvent]>),
 	DevicePresence {
 		device: SupportedDeviceType,
 		present: bool,
 	},
-	// A temporary monkey patch.
-	Unknown(Box<dyn std::fmt::Debug + Send>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -212,6 +248,68 @@ impl TouchStates {
 	}
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct StylusState {
+	tool: StylusTool,
+	touching: bool,
+	x: u16,
+	y: u16,
+	pressure: u16,
+	distance: u8,
+	tilt_x: i16,
+	tilt_y: i16,
+}
+
+impl StylusState {
+	#[inline]
+	#[must_use]
+	pub fn tool(self) -> StylusTool {
+		self.tool
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn touching(self) -> bool {
+		self.touching
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn x(self) -> f32 {
+		f32::from(self.y) * (rmox_common::FB_WIDTH as f32 / 15725.0)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn y(self) -> f32 {
+		rmox_common::FB_HEIGHT as f32 - f32::from(self.x) * (rmox_common::FB_HEIGHT as f32 / 20967.0)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn position(self) -> Point {
+		Point::new(self.x() as i32, self.y() as i32)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn pressure(self) -> u16 {
+		self.pressure
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn distance(self) -> u8 {
+		self.distance
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn tilt(self) -> Point {
+		Point::new(self.tilt_x.into(), self.tilt_y.into())
+	}
+}
+
 #[derive(Debug)]
 pub struct Input {
 	events_recv: Receiver<InternalEvent>,
@@ -228,6 +326,8 @@ pub struct Input {
 	held_keys: [Option<Key>; Scancode::ALL.len()],
 
 	touch_states: TouchStates,
+
+	stylus_state: Option<StylusState>,
 }
 
 macro_rules! device_types {
@@ -346,19 +446,42 @@ fn handle_stylus(
 	events: FetchEventsSynced<'_>,
 	events_send: &SyncSender<InternalEvent>,
 ) -> Result<(), ()> {
-	handle_todo(events, events_send, SupportedDeviceType::Stylus)
-}
-
-fn handle_todo(
-	events: FetchEventsSynced<'_>,
-	events_send: &SyncSender<InternalEvent>,
-	type_: SupportedDeviceType,
-) -> Result<(), ()> {
-	let events = events
-		.filter(|event| event.event_type() != evdev::EventType::SYNCHRONIZATION)
-		.map(|event| (type_, event.kind(), event.value()))
-		.collect::<Vec<_>>();
-	let event = InternalEvent::Unknown(Box::new(events));
+	use evdev::{AbsoluteAxisType as A, InputEventKind as K};
+	use InternalStylusEvent as E;
+	let events: Box<[E]> = events
+		.filter_map(|event| {
+			let value = event.value();
+			Some(match event.kind() {
+				K::AbsAxis(axis) => match axis {
+					A::ABS_X => E::PositionX(value.try_into().unwrap()),
+					A::ABS_Y => E::PositionY(value.try_into().unwrap()),
+					A::ABS_PRESSURE => E::Pressure(value.try_into().unwrap()),
+					A::ABS_DISTANCE => E::Distance(value.try_into().unwrap()),
+					A::ABS_TILT_X => E::TiltX(value.try_into().unwrap()),
+					A::ABS_TILT_Y => E::TiltY(value.try_into().unwrap()),
+					_ => {
+						tracing::warn!(?axis, "unhandled abs axis");
+						return None;
+					}
+				},
+				K::Key(key) => {
+					let press = value == 1;
+					if let Some(tool) = StylusTool::from_evdev(key) {
+						E::Tool(press.then_some(tool))
+					} else if key == evdev::Key::BTN_TOUCH {
+						E::Touch(press)
+					} else {
+						return None;
+					}
+				}
+				_ => return None,
+			})
+		})
+		.collect();
+	if events.is_empty() {
+		return Ok(());
+	}
+	let event = InternalEvent::Stylus(events);
 	events_send.send(event).map_err(|_| ())
 }
 
@@ -466,6 +589,8 @@ impl Input {
 			held_keys: [None; Scancode::ALL.len()],
 
 			touch_states: TouchStates::default(),
+
+			stylus_state: None,
 		})
 	}
 
@@ -553,11 +678,13 @@ impl Input {
 		}
 
 		for &event in events {
+			use InternalTouchscreenEvent as E;
+
 			match event {
-				InternalTouchscreenEvent::Slot(v) => {
+				E::Slot(v) => {
 					self.touch_states.set_slot(v);
 				}
-				InternalTouchscreenEvent::TouchEnd => {
+				E::TouchEnd => {
 					let Some((slot, state)) = self.touch_states.current() else {
 						continue;
 					};
@@ -570,12 +697,12 @@ impl Input {
 						Some(TouchPhase::End)
 					};
 				}
-				InternalTouchscreenEvent::PositionX(v) => touch_state!().x = v,
-				InternalTouchscreenEvent::PositionY(v) => touch_state!().y = v,
-				InternalTouchscreenEvent::Pressure(v) => touch_state!().pressure = v,
-				InternalTouchscreenEvent::TouchMajor(v) => touch_state!().touch_major = v,
-				InternalTouchscreenEvent::TouchMinor(v) => touch_state!().touch_minor = v,
-				InternalTouchscreenEvent::Orientation(v) => touch_state!().orientation = v,
+				E::PositionX(v) => touch_state!().x = v,
+				E::PositionY(v) => touch_state!().y = v,
+				E::Pressure(v) => touch_state!().pressure = v,
+				E::TouchMajor(v) => touch_state!().touch_major = v,
+				E::TouchMinor(v) => touch_state!().touch_minor = v,
+				E::Orientation(v) => touch_state!().orientation = v,
 			}
 		}
 
@@ -592,6 +719,58 @@ impl Input {
 		}
 	}
 
+	fn process_stylus(&mut self, events: &[InternalStylusEvent]) {
+		macro_rules! state {
+			() => {{
+				let Some(state) = &mut self.stylus_state else {
+					continue;
+				};
+				state
+			}};
+		}
+
+		let prev_touching = self.stylus_state.map(|state| state.touching);
+
+		for &event in events {
+			use InternalStylusEvent as E;
+
+			match event {
+				E::Tool(v) => {
+					self.stylus_state = v.map(|tool| StylusState {
+						tool,
+						touching: false,
+						x: 0,
+						y: 0,
+						pressure: 0,
+						distance: 0,
+						tilt_x: 0,
+						tilt_y: 0,
+					});
+				}
+				E::Touch(v) => state!().touching = v,
+				E::PositionX(v) => state!().x = v,
+				E::PositionY(v) => state!().y = v,
+				E::Pressure(v) => state!().pressure = v,
+				E::Distance(v) => state!().distance = v,
+				E::TiltX(v) => state!().tilt_x = v,
+				E::TiltY(v) => state!().tilt_y = v,
+			}
+		}
+
+		#[allow(clippy::match_same_arms)] // Clarity.
+		let phase = match (prev_touching, self.stylus_state.map(|state| state.touching)) {
+			(None, None) => return,
+			(None, Some(true)) => StylusPhase::Touch,
+			(None, Some(false)) => StylusPhase::Hover,
+			(Some(true), None) => StylusPhase::Lift,
+			(Some(false), None) => StylusPhase::Leave,
+			(Some(false), Some(false)) | (Some(true), Some(true)) => StylusPhase::Change,
+			(Some(true), Some(false)) => StylusPhase::Lift,
+			(Some(false), Some(true)) => StylusPhase::Touch,
+		};
+		self.enqueue(Event::Stylus(phase));
+	}
+
 	fn process_presence(&mut self, device: SupportedDeviceType, present: bool) {
 		self.device_presence[device as usize] = present;
 		self.enqueue(Event::DevicePresence { device, present });
@@ -601,8 +780,8 @@ impl Input {
 		match event {
 			InternalEvent::Key { scancode, event } => self.process_key(scancode, event),
 			InternalEvent::Touchscreen(events) => self.process_touchscreen(&events),
+			InternalEvent::Stylus(events) => self.process_stylus(&events),
 			InternalEvent::DevicePresence { device, present } => self.process_presence(device, present),
-			InternalEvent::Unknown(data) => self.enqueue(Event::Unknown(data)),
 		}
 	}
 
@@ -634,6 +813,12 @@ impl Input {
 			.touch_states
 			.get(id.0)
 			.expect("invalid TouchId out of bounds of touch_states")
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn stylus_state(&self) -> Option<StylusState> {
+		self.stylus_state
 	}
 
 	#[inline]
