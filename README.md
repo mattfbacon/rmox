@@ -21,7 +21,7 @@ call=sleep inf
 ```
 
 3. Run that `.draft` file from your launcher.
-4. Use the following command to build, copy, and run the binary: `cross build --release --target armv7-unknown-linux-gnueabihf && rsync -vzh $TARGET_DIR/armv7-unknown-linux-gnueabihf/release/testing root@10.11.99.1:/home/root/tempbin && ssh root@10.11.99.1 /home/root/tempbin`.
+4. Use the following command to build, copy, and run the binary: `cross build --release --target armv7-unknown-linux-gnueabihf && rsync -vzh $TARGET_DIR/armv7-unknown-linux-gnueabihf/release/testing root@10.11.99.1:/home/root/tempbin && ssh -t root@10.11.99.1 /home/root/tempbin`.
 
 ## License
 
