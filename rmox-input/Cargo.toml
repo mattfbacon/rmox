@@ -6,8 +6,7 @@ edition = "2021"
 [dependencies]
 embedded-graphics-core = "0.4"
 enumset = "1"
-evdev = { version = "0.12", features = ["tokio"] }
-futures-core = "0.3"
+evdev = { git = "https://github.com/mattfbacon/evdev", rev = "6d4a73218fd9e099ff3787f849304a5edbd76147" }
 inotify = { version = "0.10", default-features = false }
 rmox-common = { path = "../rmox-common" }
 tracing = "0.1"

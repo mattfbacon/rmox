@@ -11,9 +11,9 @@ macro_rules! scancode_and_key {
 
 		impl Scancode {
 			#[must_use]
-			pub(crate) fn from_evdev(raw: evdev::Key) -> Option<Self> {
+			pub(crate) fn from_evdev(raw: evdev::KeyCode) -> Option<Self> {
 				Some(match raw {
-					$(evdev::Key::$physical_evdev => Self::$physical_name,)*
+					$(evdev::KeyCode::$physical_evdev => Self::$physical_name,)*
 					_ => return None,
 				})
 			}
