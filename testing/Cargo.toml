@@ -8,5 +8,7 @@ embedded-graphics = "0.8"
 rmox-fb = { path = "../rmox-fb" }
 rmox-input = { path = "../rmox-input" }
 time = "0.3"
+tokio = { version = "1", features = ["macros", "rt", "time", "signal"] }
+tokio-stream = { version = "0.1", default-features = false }
 tracing = "0.1"
 tracing-subscriber = "0.3"

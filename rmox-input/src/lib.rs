@@ -18,10 +18,13 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::mpsc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use embedded_graphics_core::geometry::Point;
 use evdev::{AbsoluteAxisCode, Device, EventSummary, EventType, FetchEventsSynced, KeyCode};
+use futures_core::{ready, Stream};
+use tokio::sync::mpsc;
 
 pub use crate::key::{Key, Scancode};
 use crate::layout::{DefaultLayout, KeyboardLayout, Resolved};
@@ -378,7 +381,7 @@ fn detect_device_type(device: &Device) -> Option<SupportedDeviceType> {
 
 fn handle_keyboard(
 	events: FetchEventsSynced<'_>,
-	events_send: &mpsc::SyncSender<InternalEvent>,
+	events_send: &mpsc::Sender<InternalEvent>,
 ) -> Result<(), ()> {
 	for event in events {
 		let EventSummary::Key(_, key, value) = event.destructure() else {
@@ -397,14 +400,14 @@ fn handle_keyboard(
 			scancode: key,
 			event,
 		};
-		events_send.send(event).map_err(|_| ())?;
+		events_send.try_send(event).map_err(|_| ())?;
 	}
 	Ok(())
 }
 
 fn handle_touchscreen(
 	events: FetchEventsSynced<'_>,
-	events_send: &mpsc::SyncSender<InternalEvent>,
+	events_send: &mpsc::Sender<InternalEvent>,
 ) -> Result<(), ()> {
 	use evdev::AbsoluteAxisCode as A;
 	use InternalTouchscreenEvent as E;
@@ -438,12 +441,12 @@ fn handle_touchscreen(
 		return Ok(());
 	}
 	let event = InternalEvent::Touchscreen(events);
-	events_send.send(event).map_err(|_| ())
+	events_send.try_send(event).map_err(|_| ())
 }
 
 fn handle_stylus(
 	events: FetchEventsSynced<'_>,
-	events_send: &mpsc::SyncSender<InternalEvent>,
+	events_send: &mpsc::Sender<InternalEvent>,
 ) -> Result<(), ()> {
 	use evdev::{AbsoluteAxisCode as A, EventSummary as S};
 	use InternalStylusEvent as E;
@@ -480,13 +483,13 @@ fn handle_stylus(
 		return Ok(());
 	}
 	let event = InternalEvent::Stylus(events);
-	events_send.send(event).map_err(|_| ())
+	events_send.try_send(event).map_err(|_| ())
 }
 
 fn handle_device(
 	type_: SupportedDeviceType,
 	device: &mut Device,
-	events_send: &mpsc::SyncSender<InternalEvent>,
+	events_send: &mpsc::Sender<InternalEvent>,
 ) {
 	let handler = match type_ {
 		SupportedDeviceType::Keyboard | SupportedDeviceType::Buttons => handle_keyboard,
@@ -510,7 +513,7 @@ fn handle_device(
 	}
 
 	tracing::debug!(device=?device.name().unwrap(), ?type_, "device disconnected");
-	_ = events_send.send(InternalEvent::DevicePresence {
+	_ = events_send.try_send(InternalEvent::DevicePresence {
 		device: type_,
 		present: false,
 	});
@@ -519,7 +522,7 @@ fn handle_device(
 fn autodetect_device(
 	path: &Path,
 	mut device: Device,
-	events_send: &mpsc::SyncSender<InternalEvent>,
+	events_send: &mpsc::Sender<InternalEvent>,
 ) -> Result<(), ()> {
 	let type_ = detect_device_type(&device);
 	let name = device.name().unwrap();
@@ -531,7 +534,7 @@ fn autodetect_device(
 			device: type_,
 			present: true,
 		};
-		events_send.send(event).map_err(|_| ())?;
+		events_send.try_send(event).map_err(|_| ())?;
 
 		let events_send = events_send.clone();
 		// TODO: Consider using something like `select` instead of threads.
@@ -545,7 +548,7 @@ impl Input {
 	pub fn open() -> std::io::Result<Self> {
 		tracing::debug!("Input::new, performing initial enumeration");
 
-		let (events_send, events_recv) = mpsc::sync_channel(8);
+		let (events_send, events_recv) = mpsc::channel(8);
 
 		for (path, device) in evdev::enumerate() {
 			_ = autodetect_device(&path, device, &events_send);
@@ -784,19 +787,6 @@ impl Input {
 
 	#[inline]
 	#[must_use]
-	pub fn next_event(&mut self) -> Event {
-		loop {
-			if let Some(prev_event) = self.out_queue.pop_front() {
-				return prev_event;
-			}
-
-			let raw = self.events_recv.recv().expect("all event threads crashed");
-			self.process_event(raw);
-		}
-	}
-
-	#[inline]
-	#[must_use]
 	pub fn modifiers(&self) -> Modifiers {
 		self.modifiers
 	}
@@ -822,6 +812,22 @@ impl Input {
 	#[must_use]
 	pub fn device_present(&self, device: SupportedDeviceType) -> bool {
 		self.device_presence[device as usize]
+	}
+}
+
+impl Stream for Input {
+	type Item = Event;
+
+	#[inline]
+	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
+		loop {
+			if let Some(prev_event) = self.out_queue.pop_front() {
+				return Poll::Ready(Some(prev_event));
+			}
+
+			let raw = ready!(self.events_recv.poll_recv(cx)).expect("all event threads crashed");
+			self.process_event(raw);
+		}
 	}
 }
 

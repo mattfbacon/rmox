@@ -7,6 +7,8 @@ edition = "2021"
 embedded-graphics-core = "0.4"
 enumset = "1"
 evdev = { git = "https://github.com/mattfbacon/evdev", rev = "6d4a73218fd9e099ff3787f849304a5edbd76147" }
+futures-core = "0.3"
 inotify = { version = "0.10", default-features = false }
 rmox-common = { path = "../rmox-common" }
+tokio = { version = "1", features = ["sync"] }
 tracing = "0.1"
