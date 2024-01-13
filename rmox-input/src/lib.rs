@@ -14,7 +14,6 @@
 )]
 #![warn(clippy::pedantic)]
 #![forbid(unsafe_code)]
-// TODO: Clean up panics and unwraps.
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -22,9 +21,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use embedded_graphics_core::geometry::Point;
-use evdev::{AbsoluteAxisCode, Device, EventSummary, EventType, FetchEventsSynced, KeyCode};
-use futures_core::{ready, Stream};
-use tokio::sync::mpsc;
+use evdev::{AbsoluteAxisCode, Device, EventStream, EventSummary, EventType, KeyCode};
+use futures_core::Stream;
 
 pub use crate::key::{Key, Scancode};
 use crate::layout::DefaultLayout;
@@ -78,7 +76,7 @@ pub enum Button {
 
 // Internal invariant: `self.0` is a valid index into `Input::touch_states`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TouchId(u8);
+pub struct TouchId(pub(crate) u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TouchPhase {
@@ -109,17 +107,13 @@ pub enum Event {
 		button: Button,
 		pressed: bool,
 	},
-	DevicePresence {
-		device: SupportedDeviceType,
-		present: bool,
-	},
 	Touch {
 		id: TouchId,
 		phase: TouchPhase,
 	},
 	Stylus(StylusPhase),
+	DevicePresence(SupportedDeviceType),
 }
-
 #[derive(Debug, Clone, Copy)]
 enum InternalTouchscreenEvent {
 	Slot(u8),
@@ -159,20 +153,6 @@ enum InternalStylusEvent {
 	Distance(u8),
 	TiltX(i16),
 	TiltY(i16),
-}
-
-#[derive(Debug)]
-enum InternalEvent {
-	Key {
-		scancode: Scancode,
-		event: KeyEventKind,
-	},
-	Touchscreen(Box<[InternalTouchscreenEvent]>),
-	Stylus(Box<[InternalStylusEvent]>),
-	DevicePresence {
-		device: SupportedDeviceType,
-		present: bool,
-	},
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -314,12 +294,14 @@ impl StylusState {
 	}
 }
 
-#[derive(Debug)]
-pub struct Input {
-	events_recv: mpsc::Receiver<InternalEvent>,
-	out_queue: VecDeque<Event>,
+struct Devices {
+	devices: [Option<EventStream>; SupportedDeviceType::ALL.len()],
+	last_polled_device: u8,
+	inotify: inotify::EventStream<[u8; 256]>,
+}
 
-	device_presence: [bool; SupportedDeviceType::ALL.len()],
+struct InputState {
+	out_queue: VecDeque<Event>,
 
 	keyboard_layout: Box<dyn KeyboardLayout>,
 	modifiers: Modifiers,
@@ -332,6 +314,11 @@ pub struct Input {
 	touch_states: TouchStates,
 
 	stylus_state: Option<StylusState>,
+}
+
+pub struct Input {
+	devices: Devices,
+	state: InputState,
 }
 
 macro_rules! device_types {
@@ -380,10 +367,7 @@ fn detect_device_type(device: &Device) -> Option<SupportedDeviceType> {
 	None
 }
 
-fn handle_keyboard(
-	events: FetchEventsSynced<'_>,
-	events_send: &mpsc::Sender<InternalEvent>,
-) -> Result<(), ()> {
+fn handle_keyboard(events: impl IntoIterator<Item = evdev::InputEvent>, input: &mut InputState) {
 	for event in events {
 		let EventSummary::Key(_, key, value) = event.destructure() else {
 			continue;
@@ -397,204 +381,144 @@ fn handle_keyboard(
 			2 => KeyEventKind::Repeat,
 			_ => continue,
 		};
-		let event = InternalEvent::Key {
-			scancode: key,
-			event,
-		};
-		events_send.try_send(event).map_err(|_| ())?;
+		input.process_key(key, event);
 	}
-	Ok(())
 }
 
-fn handle_touchscreen(
-	events: FetchEventsSynced<'_>,
-	events_send: &mpsc::Sender<InternalEvent>,
-) -> Result<(), ()> {
+fn handle_touchscreen(events: impl IntoIterator<Item = evdev::InputEvent>, input: &mut InputState) {
 	use evdev::AbsoluteAxisCode as A;
 	use InternalTouchscreenEvent as E;
-	let events: Box<[E]> = events
-		.filter_map(|event| {
-			let EventSummary::AbsoluteAxis(_, axis, value) = event.destructure() else {
-				return None;
-			};
-			let event = match axis {
-				A::ABS_MT_SLOT => E::Slot(value.try_into().unwrap()),
-				A::ABS_MT_TRACKING_ID => {
-					if value == -1 {
-						E::TouchEnd
-					} else {
-						return None;
-					}
+	let events = events.into_iter().filter_map(|event| {
+		let EventSummary::AbsoluteAxis(_, axis, value) = event.destructure() else {
+			return None;
+		};
+		let event = match axis {
+			A::ABS_MT_SLOT => E::Slot(value.try_into().unwrap()),
+			A::ABS_MT_TRACKING_ID => {
+				if value == -1 {
+					E::TouchEnd
+				} else {
+					return None;
 				}
-				A::ABS_MT_POSITION_X => E::PositionX(value.try_into().unwrap()),
-				A::ABS_MT_POSITION_Y => E::PositionY(value.try_into().unwrap()),
-				A::ABS_MT_PRESSURE => E::Pressure(value.try_into().unwrap()),
-				A::ABS_MT_TOUCH_MAJOR => E::TouchMajor(value.try_into().unwrap()),
-				A::ABS_MT_TOUCH_MINOR => E::TouchMinor(value.try_into().unwrap()),
-				A::ABS_MT_ORIENTATION => E::Orientation(value.try_into().unwrap()),
-				// Although the touchscreen does report `ABS_MT_DISTANCE`, it seems to always be zero, so we ignore it.
-				_ => return None,
-			};
-			Some(event)
-		})
-		.collect();
-	if events.is_empty() {
-		return Ok(());
-	}
-	let event = InternalEvent::Touchscreen(events);
-	events_send.try_send(event).map_err(|_| ())
+			}
+			A::ABS_MT_POSITION_X => E::PositionX(value.try_into().unwrap()),
+			A::ABS_MT_POSITION_Y => E::PositionY(value.try_into().unwrap()),
+			A::ABS_MT_PRESSURE => E::Pressure(value.try_into().unwrap()),
+			A::ABS_MT_TOUCH_MAJOR => E::TouchMajor(value.try_into().unwrap()),
+			A::ABS_MT_TOUCH_MINOR => E::TouchMinor(value.try_into().unwrap()),
+			A::ABS_MT_ORIENTATION => E::Orientation(value.try_into().unwrap()),
+			// Although the touchscreen does report `ABS_MT_DISTANCE`, it seems to always be zero, so we ignore it.
+			_ => return None,
+		};
+		Some(event)
+	});
+	input.process_touchscreen(events);
 }
 
-fn handle_stylus(
-	events: FetchEventsSynced<'_>,
-	events_send: &mpsc::Sender<InternalEvent>,
-) -> Result<(), ()> {
+fn handle_stylus(events: impl IntoIterator<Item = evdev::InputEvent>, input: &mut InputState) {
 	use evdev::{AbsoluteAxisCode as A, EventSummary as S};
 	use InternalStylusEvent as E;
-	let events: Box<[E]> = events
-		.filter_map(|event| {
-			Some(match event.destructure() {
-				S::AbsoluteAxis(_, axis, value) => match axis {
-					A::ABS_X => E::PositionX(value.try_into().unwrap()),
-					A::ABS_Y => E::PositionY(value.try_into().unwrap()),
-					A::ABS_PRESSURE => E::Pressure(value.try_into().unwrap()),
-					A::ABS_DISTANCE => E::Distance(value.try_into().unwrap()),
-					A::ABS_TILT_X => E::TiltX(value.try_into().unwrap()),
-					A::ABS_TILT_Y => E::TiltY(value.try_into().unwrap()),
-					_ => {
-						tracing::warn!(?axis, "unhandled abs axis");
-						return None;
-					}
-				},
-				S::Key(_, key, value) => {
-					let press = value == 1;
-					if let Some(tool) = StylusTool::from_evdev(key) {
-						E::Tool(press.then_some(tool))
-					} else if key == KeyCode::BTN_TOUCH {
-						E::Touch(press)
-					} else {
-						return None;
-					}
-				}
+	let events = events.into_iter().filter_map(|event| {
+		Some(match event.destructure() {
+			S::AbsoluteAxis(_, axis, value) => match axis {
+				A::ABS_X => E::PositionX(value.try_into().unwrap()),
+				A::ABS_Y => E::PositionY(value.try_into().unwrap()),
+				A::ABS_PRESSURE => E::Pressure(value.try_into().unwrap()),
+				A::ABS_DISTANCE => E::Distance(value.try_into().unwrap()),
+				A::ABS_TILT_X => E::TiltX(value.try_into().unwrap()),
+				A::ABS_TILT_Y => E::TiltY(value.try_into().unwrap()),
 				_ => return None,
-			})
-		})
-		.collect();
-	if events.is_empty() {
-		return Ok(());
-	}
-	let event = InternalEvent::Stylus(events);
-	events_send.try_send(event).map_err(|_| ())
-}
-
-fn handle_device(
-	type_: SupportedDeviceType,
-	device: &mut Device,
-	events_send: &mpsc::Sender<InternalEvent>,
-) {
-	let handler = match type_ {
-		SupportedDeviceType::Keyboard | SupportedDeviceType::Buttons => handle_keyboard,
-		SupportedDeviceType::Touchscreen => handle_touchscreen,
-		SupportedDeviceType::Stylus => handle_stylus,
-	};
-
-	loop {
-		let events = match device.fetch_events() {
-			Ok(events) => events,
-			Err(error) => match error.raw_os_error() {
-				// `errno` for "No such device". The device was disconnected.
-				Some(19) => break,
-				_ => panic!("{error}"),
 			},
-		};
-		let res = handler(events, events_send);
-		if res.is_err() {
-			return;
-		}
-	}
-
-	tracing::debug!(device=?device.name().unwrap(), ?type_, "device disconnected");
-	_ = events_send.try_send(InternalEvent::DevicePresence {
-		device: type_,
-		present: false,
+			S::Key(_, key, value) => {
+				let press = value == 1;
+				if let Some(tool) = StylusTool::from_evdev(key) {
+					E::Tool(press.then_some(tool))
+				} else if key == KeyCode::BTN_TOUCH {
+					E::Touch(press)
+				} else {
+					return None;
+				}
+			}
+			_ => return None,
+		})
 	});
+	input.process_stylus(events);
 }
 
-fn autodetect_device(
-	path: &Path,
-	mut device: Device,
-	events_send: &mpsc::Sender<InternalEvent>,
-) -> Result<(), ()> {
-	let type_ = detect_device_type(&device);
-	let name = device.name().unwrap();
-
-	tracing::debug!(?path, ?name, ?type_, "auto-detecting device");
-	if let Some(type_) = type_ {
-		tracing::debug!(device=?name, ?type_, "device connected");
-		let event = InternalEvent::DevicePresence {
-			device: type_,
-			present: true,
-		};
-		events_send.try_send(event).map_err(|_| ())?;
-
-		let events_send = events_send.clone();
-		// TODO: Consider using something like `select` instead of threads.
-		std::thread::spawn(move || handle_device(type_, &mut device, &events_send));
-	}
-
-	Ok(())
-}
+const INPUT_DIR: &str = "/dev/input";
 
 impl Input {
 	pub fn open() -> std::io::Result<Self> {
+		let inotify = inotify::Inotify::init()?;
+		inotify
+			.watches()
+			.add(INPUT_DIR, inotify::WatchMask::CREATE)?;
+		let inotify = inotify.into_event_stream([0u8; 256])?;
+
+		let mut ret = Self {
+			devices: Devices {
+				devices: std::array::from_fn(|_| None),
+				last_polled_device: 0,
+				inotify,
+			},
+
+			state: InputState {
+				out_queue: VecDeque::with_capacity(1),
+
+				keyboard_layout: Box::new(DefaultLayout),
+				modifiers: Modifiers::none(),
+				held_keys: [None; Scancode::ALL.len()],
+
+				touch_states: TouchStates::default(),
+
+				stylus_state: None,
+			},
+		};
+
+		ret.devices.enumerate()?;
+
+		Ok(ret)
+	}
+}
+
+impl Devices {
+	fn enumerate(&mut self) -> std::io::Result<()> {
 		tracing::debug!("Input::new, performing initial enumeration");
 
-		let (events_send, events_recv) = mpsc::channel(8);
-
 		for (path, device) in evdev::enumerate() {
-			_ = autodetect_device(&path, device, &events_send);
+			self.autodetect_device(&path, device)?;
 		}
 
-		let input_dir = Path::new("/dev/input");
-		let mut inotify = inotify::Inotify::init()?;
-		inotify.watches().add(
-			input_dir,
-			inotify::WatchMask::CREATE | inotify::WatchMask::MOVED_TO,
-		)?;
-		std::thread::spawn(move || {
-			let mut buf = [0u8; 1024];
-			loop {
-				let events = inotify.read_events_blocking(&mut buf).unwrap();
-				for event in events {
-					let Some(name) = event.name else {
-						continue;
-					};
-					let path = input_dir.join(name);
-					tracing::debug!(?path, "new input device");
-					let device = Device::open(&path).unwrap();
-					if autodetect_device(&path, device, &events_send).is_err() {
-						break;
-					}
-				}
-			}
-		});
-
-		Ok(Self {
-			events_recv,
-			out_queue: VecDeque::with_capacity(1),
-
-			device_presence: [false; SupportedDeviceType::ALL.len()],
-
-			keyboard_layout: Box::new(DefaultLayout),
-			modifiers: Modifiers::none(),
-			held_keys: [None; Scancode::ALL.len()],
-
-			touch_states: TouchStates::default(),
-
-			stylus_state: None,
-		})
+		Ok(())
 	}
 
+	fn autodetect_device(
+		&mut self,
+		path: &Path,
+		device: Device,
+	) -> std::io::Result<Option<SupportedDeviceType>> {
+		let type_ = detect_device_type(&device);
+		let name = device.name().unwrap();
+
+		tracing::debug!(?path, ?name, ?type_, "auto-detecting device");
+
+		let Some(type_) = type_ else {
+			return Ok(None);
+		};
+
+		let slot = &mut self.devices[type_ as usize];
+		if let Some(old) = &slot {
+			tracing::warn!(old=?old.device().name().unwrap(), new=?name, ?type_, "duplicate device for type. ignoring new device.");
+			return Ok(None);
+		}
+
+		tracing::debug!(device=?name, ?type_, "device connected");
+		*slot = Some(device.into_event_stream()?);
+		Ok(Some(type_))
+	}
+}
+
+impl InputState {
 	fn update_modifier(&mut self, modifier: Modifier, event: KeyEventKind) {
 		if modifier.is_toggle() {
 			if event == KeyEventKind::Press {
@@ -657,7 +581,7 @@ impl Input {
 		}
 	}
 
-	fn process_touchscreen(&mut self, events: &[InternalTouchscreenEvent]) {
+	fn process_touchscreen(&mut self, events: impl Iterator<Item = InternalTouchscreenEvent>) {
 		let mut changes = [None; 32];
 
 		macro_rules! touch_state {
@@ -678,7 +602,7 @@ impl Input {
 			}};
 		}
 
-		for &event in events {
+		for event in events {
 			use InternalTouchscreenEvent as E;
 
 			match event {
@@ -720,7 +644,7 @@ impl Input {
 		}
 	}
 
-	fn process_stylus(&mut self, events: &[InternalStylusEvent]) {
+	fn process_stylus(&mut self, events: impl Iterator<Item = InternalStylusEvent>) {
 		macro_rules! state {
 			() => {{
 				let Some(state) = &mut self.stylus_state else {
@@ -732,7 +656,7 @@ impl Input {
 
 		let prev_touching = self.stylus_state.map(|state| state.touching);
 
-		for &event in events {
+		for event in events {
 			use InternalStylusEvent as E;
 
 			match event {
@@ -771,25 +695,13 @@ impl Input {
 		};
 		self.enqueue(Event::Stylus(phase));
 	}
+}
 
-	fn process_presence(&mut self, device: SupportedDeviceType, present: bool) {
-		self.device_presence[device as usize] = present;
-		self.enqueue(Event::DevicePresence { device, present });
-	}
-
-	fn process_event(&mut self, event: InternalEvent) {
-		match event {
-			InternalEvent::Key { scancode, event } => self.process_key(scancode, event),
-			InternalEvent::Touchscreen(events) => self.process_touchscreen(&events),
-			InternalEvent::Stylus(events) => self.process_stylus(&events),
-			InternalEvent::DevicePresence { device, present } => self.process_presence(device, present),
-		}
-	}
-
+impl Input {
 	#[inline]
 	#[must_use]
 	pub fn modifiers(&self) -> Modifiers {
-		self.modifiers
+		self.state.modifiers
 	}
 
 	#[inline]
@@ -798,6 +710,7 @@ impl Input {
 		// We assert that any `TouchId` will fit within the bounds of our states array,
 		// because its inner field is private and only we construct it.
 		*self
+			.state
 			.touch_states
 			.get(id.0)
 			.unwrap_or_else(|| unreachable!("invalid {id:?} out of bounds of touch_states"))
@@ -806,28 +719,102 @@ impl Input {
 	#[inline]
 	#[must_use]
 	pub fn stylus_state(&self) -> Option<StylusState> {
-		self.stylus_state
+		self.state.stylus_state
 	}
 
 	#[inline]
 	#[must_use]
 	pub fn device_present(&self, device: SupportedDeviceType) -> bool {
-		self.device_presence[device as usize]
+		self.devices.devices[device as usize].is_some()
 	}
 }
 
 impl Stream for Input {
-	type Item = Event;
+	type Item = std::io::Result<Event>;
 
 	#[inline]
-	fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
-		loop {
-			if let Some(prev_event) = self.out_queue.pop_front() {
-				return Poll::Ready(Some(prev_event));
-			}
+	fn poll_next(
+		mut self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+	) -> Poll<Option<std::io::Result<Event>>> {
+		let this = &mut *self;
+		let devices = &mut this.devices;
+		let state = &mut this.state;
 
-			let raw = ready!(self.events_recv.poll_recv(cx)).expect("all event threads crashed");
-			self.process_event(raw);
+		if let Some(prev_event) = state.out_queue.pop_front() {
+			return Poll::Ready(Some(Ok(prev_event)));
+		}
+
+		if let Poll::Ready(Some(event)) = Pin::new(&mut devices.inotify).poll_next(cx) {
+			match (|| {
+				let event = event?;
+
+				let Some(name) = event.name else {
+					return Ok(None);
+				};
+
+				let path = Path::new(INPUT_DIR).join(name);
+
+				tracing::debug!(?path, "new input device");
+				let device = Device::open(&path)?;
+				devices.autodetect_device(&path, device)
+			})() {
+				Ok(Some(connected_type)) => {
+					return Poll::Ready(Some(Ok(Event::DevicePresence(connected_type))));
+				}
+				Ok(None) => {}
+				Err(error) => return Poll::Ready(Some(Err(error))),
+			}
+		}
+
+		'each: for _ in 0..devices.devices.len() {
+			let i = usize::from(devices.last_polled_device);
+			devices.last_polled_device = devices.last_polled_device.wrapping_add(1)
+				% u8::try_from(SupportedDeviceType::ALL.len()).unwrap();
+
+			let type_ = SupportedDeviceType::ALL[i];
+			let mut slot = &mut devices.devices[i];
+			if let Some(device) = &mut slot {
+				let handler = match type_ {
+					SupportedDeviceType::Keyboard | SupportedDeviceType::Buttons => handle_keyboard,
+					SupportedDeviceType::Touchscreen => handle_touchscreen,
+					SupportedDeviceType::Stylus => handle_stylus,
+				};
+
+				let events = device.poll_event(cx);
+				let events = events.map(|res| {
+					res.map(|events| {
+						handler(events, state);
+					})
+				});
+				match events {
+					Poll::Ready(res) => {
+						match res {
+							Ok(()) => {
+								break 'each;
+							}
+							Err(error) => match error.raw_os_error() {
+								// `errno` for "No such device". The device was disconnected.
+								Some(19) => {
+									*slot = None;
+									state.enqueue(Event::DevicePresence(type_));
+									continue;
+								}
+								_ => {
+									return Poll::Ready(Some(Err(error)));
+								}
+							},
+						}
+					}
+					Poll::Pending => continue,
+				}
+			}
+		}
+
+		if let Some(prev_event) = state.out_queue.pop_front() {
+			Poll::Ready(Some(Ok(prev_event)))
+		} else {
+			Poll::Pending
 		}
 	}
 }
@@ -842,7 +829,7 @@ impl Input {
 	#[must_use]
 	pub fn pressed_keys(&self) -> PressedKeys<'_> {
 		PressedKeys {
-			held_keys: self.held_keys.iter().enumerate(),
+			held_keys: self.state.held_keys.iter().enumerate(),
 		}
 	}
 }
