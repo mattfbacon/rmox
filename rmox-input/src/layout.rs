@@ -1,13 +1,13 @@
 use crate::{Key, Modifier, Modifiers, Scancode};
 
 #[derive(Debug)]
-pub(crate) enum Resolved {
+pub enum Resolved {
 	Text(Box<str>),
 	Modifier(Modifier),
 	NoneOfThese,
 }
 
-pub(crate) trait KeyboardLayout: std::fmt::Debug {
+pub trait KeyboardLayout: std::fmt::Debug {
 	/// `modifiers` is provided mutably so that any modifiers that act as accessors for alternate keys can be consumed.
 	fn scancode_to_key(&self, scancode: Scancode, modifiers: &mut Modifiers) -> Option<Key>;
 	/// In this case `modifiers` cannot be modified because the `Key` has already been resolved and nothing at this point would justify hiding a modifier from the client.

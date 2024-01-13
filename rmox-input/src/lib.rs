@@ -27,7 +27,8 @@ use futures_core::{ready, Stream};
 use tokio::sync::mpsc;
 
 pub use crate::key::{Key, Scancode};
-use crate::layout::{DefaultLayout, KeyboardLayout, Resolved};
+use crate::layout::DefaultLayout;
+pub use crate::layout::{KeyboardLayout, Resolved};
 pub use crate::modifiers::{Modifier, Modifiers};
 
 mod key;
