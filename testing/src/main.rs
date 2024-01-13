@@ -174,11 +174,14 @@ fn upper_if(lower: char, cond: bool) -> char {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+	eprintln!("starting");
+
 	tracing_subscriber::fmt::fmt()
 		.with_max_level(LevelFilter::INFO)
 		.init();
 
 	let mut input = Input::open().unwrap();
+
 	let fb = Framebuffer::open().expect("open framebuffer");
 
 	let mut fb = Rotate90(fb);
@@ -219,9 +222,9 @@ async fn main() {
 
 			Text::with_text_style(
 				&text,
-				Point::new(4, 4),
+				Point::new(4, (height / 6).try_into().unwrap()),
 				MonoTextStyle::new(&fonts::FONT_7X14, bg),
-				TextStyle::with_baseline(embedded_graphics::text::Baseline::Top),
+				TextStyle::with_baseline(embedded_graphics::text::Baseline::Middle),
 			)
 			.draw(&mut Scaled::<_, 3>(&mut *fb))
 			.unwrap();
@@ -241,6 +244,7 @@ async fn main() {
 				last_time = time::OffsetDateTime::now_utc();
 			}
 			Some(event) = input.next() => {
+				let event = event.unwrap();
 				if let Event::Key {  .. } = event {
 					let modifiers = input.modifiers();
 					if modifiers == last_modifiers {
