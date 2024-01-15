@@ -1,14 +1,17 @@
 [package]
-name = "testing"
+name = "wm"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-embedded-graphics = "0.8"
+argh = "0.1"
+embedded-graphics = { workspace = true }
+rmox-common = { path = "../rmox-common" }
 rmox-fb = { path = "../rmox-fb" }
 rmox-input = { path = "../rmox-input" }
+rmox-protocol = { path = "../rmox-protocol" }
 time = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "time", "signal"] }
 tokio-stream = { version = "0.1", default-features = false }
-tracing = "0.1"
+tracing = { workspace = true }
 tracing-subscriber = "0.3"

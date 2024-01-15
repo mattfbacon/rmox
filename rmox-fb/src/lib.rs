@@ -17,11 +17,14 @@
 // Unsafe code is allowed in this crate due to the low-level interfacing.
 
 use embedded_graphics_core::draw_target::DrawTarget;
-use embedded_graphics_core::geometry::{Dimensions, OriginDimensions, Point, Size};
+use embedded_graphics_core::geometry::{Dimensions, OriginDimensions, Size};
 use embedded_graphics_core::pixelcolor::raw::{RawData, RawU16};
 use embedded_graphics_core::pixelcolor::Rgb565;
-use embedded_graphics_core::primitives::{PointsIter as _, Rectangle};
+use embedded_graphics_core::primitives::{PointsIter as _, Rectangle as BadRect};
 use memmap2::MmapMut;
+use rmox_common::{mut_draw_target, EinkUpdate, Pos2, Rectangle, UpdateDepth, UpdateStyle, Vec2};
+
+pub mod util;
 
 /// A safe wrapper for an XSI message queue.
 ///
@@ -90,26 +93,6 @@ struct Channel {
 	queue: XsiQueue,
 }
 
-/// How the E-Ink driver will refresh the pixels.
-#[derive(Debug, Clone, Copy)]
-pub enum UpdateStyle {
-	/// A very fast method with minimal ghosting, but only works for black and white.
-	Monochrome,
-	/// A relatively fast method with some ghosting. Works for all colors.
-	Rgb,
-	/// A slow method with no ghosting. Works for all colors.
-	Init,
-}
-
-/// How much the E-Ink driver will try to remove ghosting.
-#[derive(Debug, Clone, Copy)]
-pub enum UpdateDepth {
-	/// A normal and relatively fast update.
-	Partial,
-	/// A longer and more thorough update. Will flash between black and white.
-	Full,
-}
-
 impl Channel {
 	const QUEUE_KEY: libc::key_t = 0x2257c;
 
@@ -148,15 +131,15 @@ impl Channel {
 		tracing::debug!(?rect, ?style, ?depth, "channel update");
 
 		let rect = rect.intersection(&Framebuffer::RECT);
-		if rect.is_zero_sized() {
+		if rect.is_empty() {
 			return Ok(());
 		}
 
 		let raw = Raw {
-			top: rect.top_left.y.try_into().unwrap(),
-			left: rect.top_left.x.try_into().unwrap(),
-			width: rect.size.width,
-			height: rect.size.height,
+			top: rect.origin.y.try_into().unwrap(),
+			left: rect.origin.x.try_into().unwrap(),
+			width: rect.size.x.try_into().unwrap(),
+			height: rect.size.y.try_into().unwrap(),
 			waveform_mode: match style {
 				// Init.
 				UpdateStyle::Init => 0x0,
@@ -196,7 +179,7 @@ impl FramebufferMapping {
 
 	/// Does not bounds-check the point.
 	#[must_use]
-	fn point_to_index(point: Point) -> usize {
+	fn point_to_index(point: Pos2) -> usize {
 		usize::try_from(point.y).unwrap() * usize::try_from(Framebuffer::WIDTH).unwrap()
 			+ usize::try_from(point.x).unwrap()
 	}
@@ -204,7 +187,8 @@ impl FramebufferMapping {
 	fn open() -> std::io::Result<Self> {
 		tracing::debug!("open framebuffer mapping");
 
-		let size_bytes = u64::from(Framebuffer::WIDTH * Framebuffer::HEIGHT)
+		let size_bytes = u64::try_from(Framebuffer::WIDTH * Framebuffer::HEIGHT)
+			.unwrap_or_else(|_| unreachable!())
 			* u64::try_from(std::mem::size_of::<Rgb565>()).unwrap_or_else(|_| unreachable!());
 
 		let file = std::fs::OpenOptions::new()
@@ -225,7 +209,7 @@ impl FramebufferMapping {
 	}
 
 	/// Does not bounds-check the point.
-	fn set_pixel(&mut self, point: Point, color: Rgb565) {
+	fn set_pixel(&mut self, point: Pos2, color: Rgb565) {
 		self.pixels_mut()[Self::point_to_index(point)] = RawU16::from(color).into_inner();
 	}
 }
@@ -236,14 +220,14 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
-	pub const WIDTH: u32 = rmox_common::FB_WIDTH;
-	pub const HEIGHT: u32 = rmox_common::FB_HEIGHT;
-	pub const SIZE: Size = Size {
-		width: Self::WIDTH,
-		height: Self::HEIGHT,
+	pub const WIDTH: i32 = rmox_common::FB_WIDTH;
+	pub const HEIGHT: i32 = rmox_common::FB_HEIGHT;
+	pub const SIZE: Vec2 = Vec2 {
+		x: Self::WIDTH,
+		y: Self::HEIGHT,
 	};
 	pub const RECT: Rectangle = Rectangle {
-		top_left: Point { x: 0, y: 0 },
+		origin: Pos2 { x: 0, y: 0 },
 		size: Self::SIZE,
 	};
 
@@ -272,7 +256,7 @@ impl Framebuffer {
 impl OriginDimensions for Framebuffer {
 	#[inline]
 	fn size(&self) -> Size {
-		Self::SIZE
+		Self::SIZE.try_into().unwrap()
 	}
 }
 
@@ -287,12 +271,12 @@ impl DrawTarget for Framebuffer {
 		let bounds = self.bounding_box();
 		let pixels = pixels.into_iter().filter(|pixel| bounds.contains(pixel.0));
 		for pixel in pixels {
-			self.mapping.set_pixel(pixel.0, pixel.1);
+			self.mapping.set_pixel(pixel.0.into(), pixel.1);
 		}
 		Ok(())
 	}
 
-	fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+	fn fill_contiguous<I>(&mut self, area: &BadRect, colors: I) -> Result<(), Self::Error>
 	where
 		I: IntoIterator<Item = Self::Color>,
 	{
@@ -307,24 +291,24 @@ impl DrawTarget for Framebuffer {
 		// Only filter if part of `area` is out-of-bounds.
 		if &intersection == area {
 			for pixel in pixels {
-				self.mapping.set_pixel(pixel.0, pixel.1);
+				self.mapping.set_pixel(pixel.0.into(), pixel.1);
 			}
 		} else {
 			let pixels = pixels.into_iter().filter(|pixel| bounds.contains(pixel.0));
 			for pixel in pixels {
-				self.mapping.set_pixel(pixel.0, pixel.1);
+				self.mapping.set_pixel(pixel.0.into(), pixel.1);
 			}
 		}
 
 		Ok(())
 	}
 
-	fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+	fn fill_solid(&mut self, area: &BadRect, color: Self::Color) -> Result<(), Self::Error> {
 		let area = area.intersection(&self.bounding_box());
 		let color = RawU16::from(color).into_inner();
 		let pixels = self.mapping.pixels_mut();
 		for y in area.rows() {
-			let y_index = FramebufferMapping::point_to_index(Point { x: 0, y });
+			let y_index = FramebufferMapping::point_to_index(Pos2 { x: 0, y });
 			let x_range = area.columns();
 			let x_range = usize::try_from(x_range.start).unwrap()..usize::try_from(x_range.end).unwrap();
 			pixels[y_index..][x_range].fill(color);
@@ -341,22 +325,6 @@ impl DrawTarget for Framebuffer {
 	}
 }
 
-pub trait EinkUpdate {
-	/// Update `rect` using the specified `style` and `depth`.
-	///
-	/// The `style` determines how the E-Ink driver refreshes the pixels.
-	/// See the [`UpdateStyle`] docs for more info.
-	///
-	/// The `depth` determines how hard the driver tries to remove ghosting.
-	/// See the [`UpdateDepth`] docs for more info.
-	///
-	/// # Errors
-	///
-	/// Writing to the rm2fb IPC channel.
-	fn update(&self, rect: &Rectangle, style: UpdateStyle, depth: UpdateDepth)
-		-> std::io::Result<()>;
-}
-
 impl EinkUpdate for Framebuffer {
 	fn update(
 		&self,
@@ -366,112 +334,6 @@ impl EinkUpdate for Framebuffer {
 	) -> std::io::Result<()> {
 		self.channel._update(area, style, depth)
 	}
-}
-
-impl<T: EinkUpdate + ?Sized> EinkUpdate for &T {
-	#[inline]
-	fn update(
-		&self,
-		area: &Rectangle,
-		style: UpdateStyle,
-		depth: UpdateDepth,
-	) -> std::io::Result<()> {
-		<T as EinkUpdate>::update(self, area, style, depth)
-	}
-}
-
-impl<T: EinkUpdate + ?Sized> EinkUpdate for &mut T {
-	#[inline]
-	fn update(
-		&self,
-		area: &Rectangle,
-		style: UpdateStyle,
-		depth: UpdateDepth,
-	) -> std::io::Result<()> {
-		<T as EinkUpdate>::update(self, area, style, depth)
-	}
-}
-
-pub trait EinkUpdateExt: EinkUpdate {
-	/// [`EinkUpdate::update`] with [`UpdateDepth::Full`].
-	///
-	/// # Errors
-	///
-	/// Same as [`EinkUpdate::update`].
-	#[inline]
-	fn update_full(&self, area: &Rectangle, style: UpdateStyle) -> std::io::Result<()> {
-		self.update(area, style, UpdateDepth::Full)
-	}
-
-	/// [`EinkUpdate::update`] with [`UpdateDepth::Partial`].
-	///
-	/// # Errors
-	///
-	/// Same as [`EinkUpdate::update`].
-	#[inline]
-	fn update_partial(&self, area: &Rectangle, style: UpdateStyle) -> std::io::Result<()> {
-		self.update(area, style, UpdateDepth::Partial)
-	}
-
-	/// [`EinkUpdate::update`] with the full bounding box of the framebuffer and [`UpdateDepth::Full`].
-	///
-	/// # Errors
-	///
-	/// Same as [`EinkUpdate::update`].
-	#[inline]
-	fn update_all(&self, style: UpdateStyle) -> std::io::Result<()>
-	where
-		Self: Dimensions,
-	{
-		self.update(&self.bounding_box(), style, UpdateDepth::Full)
-	}
-}
-
-impl<T: EinkUpdate + ?Sized> EinkUpdateExt for T {}
-
-#[doc(hidden)]
-pub mod __macro_private {
-	pub use embedded_graphics_core;
-}
-
-#[macro_export]
-macro_rules! mut_draw_target {
-	($ty:ty $(: [$($generics:tt)*])?) => {
-		impl$(<$($generics)*>)? OriginDimensions for &mut $ty {
-			#[inline]
-			fn size(&self) -> Size {
-				<$ty as OriginDimensions>::size(*self)
-			}
-		}
-
-		impl$(<$($generics)*>)? DrawTarget for &mut $ty {
-			type Color = <$ty as DrawTarget>::Color;
-
-			type Error = <$ty as DrawTarget>::Error;
-
-			fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-			where
-				I: IntoIterator<Item = $crate::__macro_private::embedded_graphics_core::Pixel<Self::Color>>,
-			{
-				<$ty as DrawTarget>::draw_iter(*self, pixels)
-			}
-
-			fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
-			where
-				I: IntoIterator<Item = Self::Color>,
-			{
-				<$ty as DrawTarget>::fill_contiguous(*self, area, colors)
-			}
-
-			fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-				<$ty as DrawTarget>::fill_solid(*self, area, color)
-			}
-
-			fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
-				<$ty as DrawTarget>::clear(*self, color)
-			}
-		}
-	};
 }
 
 mut_draw_target!(Framebuffer);

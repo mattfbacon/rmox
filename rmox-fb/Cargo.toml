@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }
-embedded-graphics-core = "0.4"
+embedded-graphics-core = { workspace = true }
 libc = "0.2"
 memmap2 = "0.9"
 rmox-common = { path = "../rmox-common" }
-tracing = "0.1"
+tracing = { workspace = true }

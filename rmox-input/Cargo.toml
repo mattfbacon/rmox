@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-embedded-graphics-core = "0.4"
+embedded-graphics-core = { workspace = true }
 enumset = "1"
 evdev = { git = "https://github.com/mattfbacon/evdev", rev = "9a9d860", features = [
 	"tokio",
@@ -14,4 +14,4 @@ inotify = { version = "0.10", default-features = false, features = ["stream"] }
 rmox-common = { path = "../rmox-common" }
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = { version = "0.1", default-features = false }
-tracing = "0.1"
+tracing = { workspace = true }

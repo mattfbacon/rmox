@@ -1,0 +1,2 @@
+#!/bin/sh
+cross build --target armv7-unknown-linux-gnueabihf --release --all && rsync -vzh --progress ~/.cache/cargo/target/armv7-unknown-linux-gnueabihf/release/wm root@10.0.0.249:/home/root/wm && ssh -t root@10.0.0.249 -- '/home/root/wm' "$@"

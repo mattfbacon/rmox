@@ -74,8 +74,26 @@ impl Modifiers {
 
 	#[inline]
 	#[must_use]
+	pub fn ctrl(self) -> bool {
+		self.contains(Modifier::Ctrl)
+	}
+
+	#[inline]
+	#[must_use]
 	pub fn opt(self) -> bool {
 		self.contains(Modifier::Opt)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn alt(self) -> bool {
+		self.contains(Modifier::Alt)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn alt_opt(self) -> bool {
+		self.contains(Modifier::AltOpt)
 	}
 }
 

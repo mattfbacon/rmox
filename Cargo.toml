@@ -1,3 +1,15 @@
 [workspace]
-members = ["rmox-common", "rmox-fb", "rmox-input", "testing"]
+members = [
+	"rmox-common",
+	"rmox-fb",
+	"rmox-input",
+	"rmox-protocol",
+	"test-app",
+	"wm",
+]
 resolver = "2"
+
+[workspace.dependencies]
+embedded-graphics-core = "0.4"
+embedded-graphics = "0.8"
+tracing = "0.1"

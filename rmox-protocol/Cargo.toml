@@ -1,0 +1,13 @@
+[package]
+name = "rmox-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ciborium = "0.2"
+embedded-graphics-core = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+rmox-common = { path = "../rmox-common" }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["io-util"] }
+tokio-stream = { version = "0.1", default-features = false }

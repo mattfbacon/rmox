@@ -20,9 +20,9 @@ pub(crate) struct DefaultLayout;
 impl KeyboardLayout for DefaultLayout {
 	/// `modifiers` is provided mutably so that any modifiers that act as accessors for alternate keys can be consumed.
 	fn scancode_to_key(&self, scancode: Scancode, modifiers: &mut Modifiers) -> Option<Key> {
-		// We are using Opt as the accessor for alternative keys.
+		// We are using AltOpt as the accessor for alternative keys.
 		'alt: {
-			if modifiers.contains(Modifier::Opt) {
+			if modifiers.contains(Modifier::AltOpt) {
 				let key = match scancode {
 					Scancode::Tab => Key::Escape,
 					Scancode::ArrowLeft => Key::Home,

@@ -15,6 +15,8 @@
 #![warn(clippy::pedantic)]
 #![forbid(unsafe_code)]
 
+// TODO: Significant reorganization. Maybe one module per logical type of event.
+
 use std::collections::VecDeque;
 use std::path::Path;
 use std::pin::Pin;
@@ -32,6 +34,11 @@ pub use crate::modifiers::{Modifier, Modifiers};
 mod key;
 mod layout;
 mod modifiers;
+
+#[doc(hidden)]
+pub mod __private {
+	pub use enumset;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyEventKind {
