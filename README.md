@@ -1,15 +1,15 @@
 # RMox
 
-A family of Rust crates for interfacing with the reMarkable 2.
+A family of Rust crates providing various functionality for the reMarkable 2.
 
-Currently includes crates for drawing to the display and getting input from the included peripherals (including the Type Folio).
+Currently includes crates for drawing to the display and getting input from the included peripherals (including the Type Folio), as well as a protocol between a Window Manager and its clients and an implementation of a WM providing that protocol.
 
 Currently under active development. The API is not finalized.
 
 ## Usage
 
-There is currently a `testing` crate which is used for testing whatever I am currently working on.
-In order to run that, I suggest the following workflow:
+There are currently `wm` and `test-app` binaries.
+In order to run them, I suggest the following workflow:
 
 1. Install a launcher capable of running `.draft` files.
 2. Create a `.draft` file for a dummy application that just runs `sleep inf`:
@@ -21,7 +21,8 @@ call=sleep inf
 ```
 
 3. Run that `.draft` file from your launcher.
-4. Use the following command to build, copy, and run the binary: `cross build --release --target armv7-unknown-linux-gnueabihf && rsync -vzh $TARGET_DIR/armv7-unknown-linux-gnueabihf/release/testing root@10.11.99.1:/home/root/tempbin && ssh -t root@10.11.99.1 /home/root/tempbin`.
+4. To run the WM, use `./run-wm --control-socket /tmp/rmox.sock`.
+5. To run the test app, use `RMOX_SOCKET=/tmp/rmox.sock ./run-test-app`.
 
 ## License
 
