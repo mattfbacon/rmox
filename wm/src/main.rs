@@ -3,23 +3,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::{Dimensions, OriginDimensions, Point, Size};
-use embedded_graphics::mono_font::{ascii as fonts, MonoTextStyle};
+use embedded_graphics::geometry::{Dimensions, Point};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::primitives::{
-	Line, Polyline, Primitive as _, PrimitiveStyleBuilder, Rectangle as BadRect, StrokeAlignment,
+	Polyline, Primitive as _, PrimitiveStyleBuilder, StrokeAlignment,
 };
-use embedded_graphics::text::{Baseline, Text, TextStyle};
-use embedded_graphics::{Drawable as _, Pixel};
-use rmox_common::{
-	mut_draw_target, rect, EinkUpdate, EinkUpdateExt as _, Pos2, Rectangle, Rotation, Side,
-	UpdateDepth, UpdateStyle,
-};
+use embedded_graphics::Drawable as _;
+use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
+use rmox_common::types::{Pos2, Rectangle, Rotation, Side};
 use rmox_fb::Framebuffer;
-use rmox_input::{Input, Key, KeyEventKind, Modifier, Modifiers};
-use rmox_protocol::server::recv::Command;
-use rmox_protocol::server::send::Event;
-use rmox_protocol::{SurfaceDescription, SurfaceInit};
+use rmox_input::keyboard::{Key, KeyEventKind};
+use rmox_input::Input;
+use rmox_protocol::server::recv::{Command, SurfaceInit};
+use rmox_protocol::server::send::{Event, SurfaceDescription};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::{pin, select};
@@ -121,8 +117,11 @@ impl Manager {
 
 		// For now this is hard-coded as an N-way horizontal split.
 		let num_roots = self.shell.root.len();
-		let root_width =
-			self.global_rotation.transform_size(Framebuffer::SIZE).x / i32::try_from(num_roots).unwrap();
+		let root_width = self
+			.global_rotation
+			.transform_size(Framebuffer::SIZE)
+			.x
+			.abs() / i32::try_from(num_roots).unwrap();
 		for (i, &root) in self.shell.root.iter().enumerate() {
 			let surface = self
 				.surfaces
@@ -291,13 +290,13 @@ async fn main() {
 					let manager = Arc::clone(&manager);
 					move |task_id, mut event_recv| async move {
 					let (client_r, mut client_w) = client.split();
-						let commands = rmox_protocol::read_stream::<_, Command>(client_r);
+						let commands = rmox_protocol::io::read_stream::<_, Command>(client_r);
 						pin!(commands);
 						loop {
 							select! {
 								Some(event) = event_recv.recv() => {
 									eprintln!("received event {event:?} for task id {task_id}");
-									rmox_protocol::write(&mut client_w, &event).await.unwrap();
+									rmox_protocol::io::write(&mut client_w, &event).await.unwrap();
 								}
 								Some(res) = commands.next() => {
 									let command = res.unwrap();
@@ -316,12 +315,12 @@ async fn main() {
 				let event = event.unwrap();
 				// TODO: This kind of thing should be handled by a dedicated daemon and some kind of hotkey reservation protocol.
 				match &event {
-					rmox_input::Event::Key {
+					rmox_input::Event::Key(rmox_input::keyboard::KeyEvent {
 						scancode: _,
 						key: Some(key),
 						event: KeyEventKind::Press,
 						modifiers,
-					} => match key {
+					}) => match key {
 						Key::Enter if modifiers.opt() => {
 							manager.lock().await.open(test_task, SurfaceInit::Normal).await;
 						}

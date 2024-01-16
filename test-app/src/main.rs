@@ -1,27 +1,15 @@
-use std::path::PathBuf;
-use std::time::Duration;
-
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::{Dimensions, OriginDimensions, Point, Size};
+use embedded_graphics::geometry::{Dimensions, Point};
 use embedded_graphics::mono_font::{ascii as fonts, MonoTextStyle};
 use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::primitives::{
-	Line, Polyline, Primitive as _, PrimitiveStyleBuilder, Rectangle as BadRect, StrokeAlignment,
-};
-use embedded_graphics::text::{Baseline, Text, TextStyle};
-use embedded_graphics::{Drawable as _, Pixel};
-use rmox_common::{
-	mut_draw_target, EinkUpdate, EinkUpdateExt as _, Rectangle, Rotation, Side, UpdateDepth,
-	UpdateStyle,
-};
+use embedded_graphics::text::{Baseline, Text};
+use embedded_graphics::Drawable as _;
+use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
+use rmox_common::types::Side;
 use rmox_fb::util::Scaled;
 use rmox_fb::Framebuffer;
-use rmox_input::{Input, Key, KeyEventKind, Modifier, Modifiers};
 use rmox_protocol::client::recv::Event;
-use rmox_protocol::server::recv::Command;
-use rmox_protocol::{SurfaceDescription, SurfaceInit};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
+use rmox_protocol::server::recv::{Command, SurfaceInit};
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
 use tracing_subscriber::filter::LevelFilter;
@@ -60,10 +48,10 @@ async fn main() {
 		.await
 		.unwrap_or_else(|error| panic!("connecting to {socket_path:?} (RMOX_SOCKET): {error}"));
 	let (socket_r, mut socket_w) = socket.split();
-	let events = rmox_protocol::read_stream::<_, Event>(socket_r);
+	let events = rmox_protocol::io::read_stream::<_, Event>(socket_r);
 	pin!(events);
 
-	rmox_protocol::write(
+	rmox_protocol::io::write(
 		&mut socket_w,
 		&Command::CreateSurface(SurfaceInit::Layer {
 			anchor: Side::Top,
