@@ -2,27 +2,25 @@ use evdev::EventSummary;
 use rmox_common::types::{pos2, Pos2};
 use serde::{Deserialize, Serialize};
 
-use crate::Event;
-
 #[derive(Debug, Clone, Copy)]
-pub struct TouchEvent {
-	pub id: TouchId,
-	pub phase: TouchPhase,
+pub struct Event {
+	pub touch_id: Id,
+	pub phase: Phase,
 }
 
 // Internal invariant: `self.0` is a valid index into `Input::touch_states`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TouchId(pub(crate) u8);
+pub struct Id(pub(crate) u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum TouchPhase {
+pub enum Phase {
 	Start,
 	Change,
 	End,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum InternalTouchscreenEvent {
+enum InternalEvent {
 	Slot(u8),
 	TouchEnd,
 	PositionX(u16),
@@ -33,6 +31,7 @@ enum InternalTouchscreenEvent {
 	Orientation(i8),
 }
 
+#[allow(clippy::module_name_repetitions)] // `State` is already taken.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TouchState {
 	x: u16,
@@ -114,7 +113,7 @@ pub(crate) fn handle_events(
 	input: &mut crate::InputState,
 ) {
 	use evdev::AbsoluteAxisCode as A;
-	use InternalTouchscreenEvent as E;
+	use InternalEvent as E;
 
 	let state = &mut input.touch;
 
@@ -145,7 +144,7 @@ pub(crate) fn handle_events(
 
 	let mut changes = [None; 32];
 
-	macro_rules! touch_state {
+	macro_rules! state {
 		() => {{
 			let Some((slot, state)) = state.current() else {
 				continue;
@@ -153,10 +152,10 @@ pub(crate) fn handle_events(
 
 			let change = &mut changes[usize::from(slot)];
 			if state.is_none() {
-				*change = Some(TouchPhase::Start);
-			} else if *change != Some(TouchPhase::Start) {
+				*change = Some(Phase::Start);
+			} else if *change != Some(Phase::Start) {
 				// This also correctly handles a Start following an End, combining them into a Change.
-				*change = Some(TouchPhase::Change);
+				*change = Some(Phase::Change);
 			}
 
 			state.get_or_insert_with(TouchState::default)
@@ -175,27 +174,27 @@ pub(crate) fn handle_events(
 				*state = None;
 
 				let change = &mut changes[slot];
-				*change = if *change == Some(TouchPhase::Start) {
+				*change = if *change == Some(Phase::Start) {
 					None
 				} else {
-					Some(TouchPhase::End)
+					Some(Phase::End)
 				};
 			}
-			E::PositionX(v) => touch_state!().x = v,
-			E::PositionY(v) => touch_state!().y = v,
-			E::Pressure(v) => touch_state!().pressure = v,
-			E::TouchMajor(v) => touch_state!().touch_major = v,
-			E::TouchMinor(v) => touch_state!().touch_minor = v,
-			E::Orientation(v) => touch_state!().orientation = v,
+			E::PositionX(v) => state!().x = v,
+			E::PositionY(v) => state!().y = v,
+			E::Pressure(v) => state!().pressure = v,
+			E::TouchMajor(v) => state!().touch_major = v,
+			E::TouchMinor(v) => state!().touch_minor = v,
+			E::Orientation(v) => state!().orientation = v,
 		}
 	}
 
 	for (slot, phase) in changes.into_iter().enumerate() {
 		if let Some(phase) = phase {
-			let event = Event::Touch(TouchEvent {
+			let event = crate::Event::Touch(Event {
 				// We are using the slot as the ID because, AFAICT, it satisfies the criteria:
 				// it doesn't change for the duration of the contact.
-				id: TouchId(slot.try_into().unwrap()),
+				touch_id: Id(slot.try_into().unwrap()),
 				phase,
 			});
 			input.enqueue(event);
@@ -206,7 +205,7 @@ pub(crate) fn handle_events(
 impl crate::Input {
 	#[inline]
 	#[must_use]
-	pub fn touch_state(&self, id: TouchId) -> Option<TouchState> {
+	pub fn touch_state(&self, id: Id) -> Option<TouchState> {
 		// We assert that any `TouchId` will fit within the bounds of our states array,
 		// because its inner field is private and only we construct it.
 		*self

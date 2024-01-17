@@ -5,7 +5,6 @@ use embedded_graphics_core::Pixel;
 use rmox_common::eink_update::{EinkUpdate, UpdateDepth, UpdateStyle};
 use rmox_common::mut_draw_target;
 use rmox_common::types::{Pos2, Rectangle, Rotation, Vec2};
-use rmox_input::SupportedDeviceType;
 use serde::{Deserialize, Serialize};
 
 use crate::SurfaceId;
@@ -153,7 +152,7 @@ pub enum TouchPhase {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TouchEvent {
-	pub id: rmox_input::touch::TouchId,
+	pub id: rmox_input::touch::Id,
 	pub phase: TouchPhase,
 }
 

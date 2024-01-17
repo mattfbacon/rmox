@@ -3,23 +3,16 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::geometry::{Dimensions, Point};
 use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::primitives::{
-	Polyline, Primitive as _, PrimitiveStyleBuilder, StrokeAlignment,
-};
-use embedded_graphics::Drawable as _;
 use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_common::types::{Pos2, Rectangle, Rotation, Side};
 use rmox_fb::Framebuffer;
-use rmox_input::keyboard::{Key, KeyEventKind};
 use rmox_input::Input;
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use rmox_protocol::server::send::{Event, InputEvent, SurfaceDescription};
 use rmox_protocol::server_to_client::{StylusEvent, StylusPhase, TouchEvent, TouchPhase};
 use rmox_protocol::{Id, SurfaceId, TaskId};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
 use tracing_subscriber::filter::LevelFilter;
@@ -32,7 +25,6 @@ struct Surface {
 
 #[derive(Debug)]
 struct Task {
-	handle: JoinHandle<()>,
 	channel: mpsc::Sender<Event>,
 }
 
@@ -67,7 +59,6 @@ struct Manager {
 }
 
 enum ManagerCommand {
-	SpawnTask { client: tokio::net::UnixStream },
 	CreateSurface { task: TaskId, options: SurfaceInit },
 	RemoveTask { task: TaskId },
 }
@@ -213,7 +204,7 @@ impl Manager {
 	) -> (TaskId, mpsc::Sender<Event>) {
 		let (event_send, mut event_recv) = mpsc::channel(2);
 		let task_id = self.next_id();
-		let handle = tokio::spawn(async move {
+		tokio::spawn(async move {
 			let (client_r, mut client_w) = client.split();
 			let commands = rmox_protocol::io::read_stream::<_, Command>(client_r);
 			pin!(commands);
@@ -253,7 +244,6 @@ impl Manager {
 		self.tasks.insert(
 			task_id,
 			Task {
-				handle,
 				channel: event_send.clone(),
 			},
 		);
@@ -315,32 +305,30 @@ impl Manager {
 			rmox_input::Event::Text(v) => InputEvent::Text(v),
 			rmox_input::Event::Button(v) => InputEvent::Button(v),
 			rmox_input::Event::Touch(event) => InputEvent::Touch(TouchEvent {
-				id: event.id,
+				id: event.touch_id,
 				phase: match event.phase {
-					rmox_input::touch::TouchPhase::Start => {
-						TouchPhase::Start(self.input.touch_state(event.id).unwrap())
+					rmox_input::touch::Phase::Start => {
+						TouchPhase::Start(self.input.touch_state(event.touch_id).unwrap())
 					}
-					rmox_input::touch::TouchPhase::Change => {
-						TouchPhase::Change(self.input.touch_state(event.id).unwrap())
+					rmox_input::touch::Phase::Change => {
+						TouchPhase::Change(self.input.touch_state(event.touch_id).unwrap())
 					}
-					rmox_input::touch::TouchPhase::End => TouchPhase::End,
+					rmox_input::touch::Phase::End => TouchPhase::End,
 				},
 			}),
 			rmox_input::Event::Stylus(event) => InputEvent::Stylus(StylusEvent {
 				phase: match event.phase {
-					rmox_input::stylus::StylusPhase::Hover => {
+					rmox_input::stylus::Phase::Hover => {
 						StylusPhase::Hover(self.input.stylus_state().unwrap())
 					}
-					rmox_input::stylus::StylusPhase::Touch => {
+					rmox_input::stylus::Phase::Touch => {
 						StylusPhase::Touch(self.input.stylus_state().unwrap())
 					}
-					rmox_input::stylus::StylusPhase::Change => {
+					rmox_input::stylus::Phase::Change => {
 						StylusPhase::Change(self.input.stylus_state().unwrap())
 					}
-					rmox_input::stylus::StylusPhase::Lift => {
-						StylusPhase::Lift(self.input.stylus_state().unwrap())
-					}
-					rmox_input::stylus::StylusPhase::Leave => StylusPhase::Leave,
+					rmox_input::stylus::Phase::Lift => StylusPhase::Lift(self.input.stylus_state().unwrap()),
+					rmox_input::stylus::Phase::Leave => StylusPhase::Leave,
 				},
 			}),
 			rmox_input::Event::DevicePresence(_) => return,
@@ -459,9 +447,6 @@ async fn main() {
 			}
 			Some(command) = command_recv.recv() => {
 				match command {
-					ManagerCommand::SpawnTask { client } => {
-						manager.spawn_task(client, handle.clone()).await;
-					}
 					ManagerCommand::CreateSurface { task, options } => {
 						manager.create_surface(task, options).await;
 					}

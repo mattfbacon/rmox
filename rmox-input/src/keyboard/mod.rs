@@ -2,7 +2,7 @@ use evdev::EventSummary;
 use serde::{Deserialize, Serialize};
 
 pub use self::key::{Key, Scancode};
-use self::layout::{DefaultLayout, KeyboardLayout, Resolved};
+use self::layout::{DefaultLayout, Layout, Resolved};
 pub use self::modifiers::{Modifier, Modifiers};
 use crate::Event;
 
@@ -67,7 +67,7 @@ pub enum Button {
 
 #[derive(Debug)]
 pub struct State {
-	keyboard_layout: Box<dyn KeyboardLayout>,
+	keyboard_layout: Box<dyn Layout>,
 	modifiers: Modifiers,
 	/// This is a map from `Scancode` to `Option<Key>`.
 	/// Each entry is `Some` iff the key with the given `Scancode` is currently pressed.

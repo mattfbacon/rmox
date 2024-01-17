@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use crate::keyboard::key::{Key, Scancode};
 use crate::keyboard::modifiers::{Modifier, Modifiers};
 use crate::keyboard::{ButtonEvent, KeyEvent};
-use crate::stylus::StylusEvent;
-use crate::touch::TouchEvent;
+use crate::stylus::Event as StylusEvent;
+use crate::touch::Event as TouchEvent;
 
 pub mod keyboard;
 pub mod stylus;
@@ -46,6 +46,7 @@ pub enum Event {
 
 #[derive(Debug)]
 struct Devices {
+	#[allow(clippy::struct_field_names)] // False positive, not a prefix or suffix.
 	devices: [Option<EventStream>; SupportedDeviceType::ALL.len()],
 	last_polled_device: u8,
 	inotify: inotify::EventStream<[u8; 256]>,
@@ -115,6 +116,10 @@ fn detect_device_type(device: &Device) -> Option<SupportedDeviceType> {
 const INPUT_DIR: &str = "/dev/input";
 
 impl Input {
+	/// # Errors
+	///
+	/// - Monitoring `/dev/input` with inotify
+	/// - Enumerating devices in `/dev/input`
 	pub fn open() -> std::io::Result<Self> {
 		let inotify = inotify::Inotify::init()?;
 		inotify

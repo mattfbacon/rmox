@@ -7,7 +7,7 @@ pub enum Resolved {
 	NoneOfThese,
 }
 
-pub trait KeyboardLayout: std::fmt::Debug + Send {
+pub trait Layout: std::fmt::Debug + Send {
 	/// `modifiers` is provided mutably so that any modifiers that act as accessors for alternate keys can be consumed.
 	fn scancode_to_key(&self, scancode: Scancode, modifiers: &mut Modifiers) -> Option<Key>;
 	/// In this case `modifiers` cannot be modified because the `Key` has already been resolved and nothing at this point would justify hiding a modifier from the client.
@@ -17,7 +17,7 @@ pub trait KeyboardLayout: std::fmt::Debug + Send {
 #[derive(Debug)]
 pub(crate) struct DefaultLayout;
 
-impl KeyboardLayout for DefaultLayout {
+impl Layout for DefaultLayout {
 	/// `modifiers` is provided mutably so that any modifiers that act as accessors for alternate keys can be consumed.
 	fn scancode_to_key(&self, scancode: Scancode, modifiers: &mut Modifiers) -> Option<Key> {
 		// We are using AltOpt as the accessor for alternative keys.

@@ -2,15 +2,13 @@ use evdev::KeyCode;
 use rmox_common::types::{pos2, Pos2};
 use serde::{Deserialize, Serialize};
 
-use crate::Event;
-
 #[derive(Debug, Clone, Copy)]
-pub struct StylusEvent {
-	pub phase: StylusPhase,
+pub struct Event {
+	pub phase: Phase,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StylusPhase {
+pub enum Phase {
 	Hover,
 	Touch,
 	Change,
@@ -19,12 +17,12 @@ pub enum StylusPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StylusTool {
+pub enum Tool {
 	Pen,
 	Rubber,
 }
 
-impl StylusTool {
+impl Tool {
 	#[must_use]
 	fn from_evdev(key: KeyCode) -> Option<Self> {
 		Some(match key {
@@ -36,8 +34,8 @@ impl StylusTool {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum InternalStylusEvent {
-	Tool(Option<StylusTool>),
+enum InternalEvent {
+	Tool(Option<Tool>),
 	Touch(bool),
 	PositionX(u16),
 	PositionY(u16),
@@ -47,9 +45,10 @@ enum InternalStylusEvent {
 	TiltY(i16),
 }
 
+#[allow(clippy::module_name_repetitions)] // `State` is already taken.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct StylusState {
-	tool: StylusTool,
+	tool: Tool,
 	touching: bool,
 	x: u16,
 	y: u16,
@@ -59,10 +58,11 @@ pub struct StylusState {
 	tilt_y: i16,
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)] // Our numbers are all in a reasonable range.
 impl StylusState {
 	#[inline]
 	#[must_use]
-	pub fn tool(self) -> StylusTool {
+	pub fn tool(self) -> Tool {
 		self.tool
 	}
 
@@ -116,7 +116,7 @@ pub(crate) fn handle_events(
 	input: &mut crate::InputState,
 ) {
 	use evdev::{AbsoluteAxisCode as A, EventSummary as S};
-	use InternalStylusEvent as E;
+	use InternalEvent as E;
 
 	let state = &mut input.stylus;
 
@@ -133,7 +133,7 @@ pub(crate) fn handle_events(
 			},
 			S::Key(_, key, value) => {
 				let press = value == 1;
-				if let Some(tool) = StylusTool::from_evdev(key) {
+				if let Some(tool) = Tool::from_evdev(key) {
 					E::Tool(press.then_some(tool))
 				} else if key == KeyCode::BTN_TOUCH {
 					E::Touch(press)
@@ -183,15 +183,15 @@ pub(crate) fn handle_events(
 	#[allow(clippy::match_same_arms)] // Clarity.
 	let phase = match (prev_touching, state.map(|state| state.touching)) {
 		(None, None) => return,
-		(None, Some(true)) => StylusPhase::Touch,
-		(None, Some(false)) => StylusPhase::Hover,
-		(Some(true), None) => StylusPhase::Lift,
-		(Some(false), None) => StylusPhase::Leave,
-		(Some(false), Some(false)) | (Some(true), Some(true)) => StylusPhase::Change,
-		(Some(true), Some(false)) => StylusPhase::Lift,
-		(Some(false), Some(true)) => StylusPhase::Touch,
+		(None, Some(true)) => Phase::Touch,
+		(None, Some(false)) => Phase::Hover,
+		(Some(true), None) => Phase::Lift,
+		(Some(false), None) => Phase::Leave,
+		(Some(false), Some(false)) | (Some(true), Some(true)) => Phase::Change,
+		(Some(true), Some(false)) => Phase::Lift,
+		(Some(false), Some(true)) => Phase::Touch,
 	};
-	input.enqueue(Event::Stylus(StylusEvent { phase }));
+	input.enqueue(crate::Event::Stylus(Event { phase }));
 }
 
 impl crate::Input {
