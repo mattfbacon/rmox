@@ -8,33 +8,45 @@ use tokio_stream::Stream;
 
 pub async fn read_<T: AsyncRead + Unpin, Item: DeserializeOwned>(
 	mut reader: T,
-) -> (Result<Item, ciborium::de::Error<std::io::Error>>, T) {
+) -> (Option<Result<Item, ciborium::de::Error<std::io::Error>>>, T) {
 	let mut buf = [0u8; 4];
 	if let Err(error) = reader.read_exact(&mut buf).await {
-		return (Err(error.into()), reader);
+		let ret = if error.kind() == std::io::ErrorKind::UnexpectedEof {
+			None
+		} else {
+			Some(Err(error.into()))
+		};
+		return (ret, reader);
 	}
 	let size: usize = u32::from_le_bytes(buf).try_into().unwrap();
 
 	let mut buf = vec![0u8; size];
 	if let Err(error) = reader.read_exact(&mut buf).await {
-		return (Err(error.into()), reader);
+		return (Some(Err(error.into())), reader);
 	}
-	(ciborium::from_reader(&*buf), reader)
+	(Some(ciborium::from_reader(&*buf)), reader)
 }
 
+/// Returns `None` if the reader has reached EOF.
 pub async fn read<T: AsyncRead + Unpin, Item: DeserializeOwned>(
 	reader: T,
-) -> Result<Item, ciborium::de::Error<std::io::Error>> {
+) -> Option<Result<Item, ciborium::de::Error<std::io::Error>>> {
 	read_(reader).await.0
 }
 
-/// This is useful because [`read`] is not cancel-safe while this `Stream` implementation necessarily is.
+/// This is useful because [`read`] is not cancel-safe while this, being a `Stream`, inherently is.
+///
 /// So if you want to use [`read`] in a `select!` arm, use this function instead.
+/// It's essentially a more convenient form of creating the future, pinning it,
+/// polling it through `&mut` in the `select!` arm,
+/// and replacing the future with a new instance in that arm.
 #[inline]
 pub fn read_stream<'a, T: AsyncRead + Unpin + 'a, Item: DeserializeOwned + 'a>(
 	reader: T,
 ) -> impl Stream<Item = Result<Item, ciborium::de::Error<std::io::Error>>> + 'a {
-	futures_util::stream::unfold(reader, move |reader| read_(reader).map(Some))
+	futures_util::stream::unfold(reader, move |reader| {
+		read_(reader).map(|(opt, reader)| Some((opt?, reader)))
+	})
 }
 
 pub async fn write<T: AsyncWrite + Unpin, Item: Serialize + ?Sized>(

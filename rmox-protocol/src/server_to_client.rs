@@ -5,7 +5,10 @@ use embedded_graphics_core::Pixel;
 use rmox_common::eink_update::{EinkUpdate, UpdateDepth, UpdateStyle};
 use rmox_common::mut_draw_target;
 use rmox_common::types::{Pos2, Rectangle, Rotation, Vec2};
+use rmox_input::SupportedDeviceType;
 use serde::{Deserialize, Serialize};
+
+use crate::SurfaceId;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct SurfaceDescription {
@@ -103,14 +106,21 @@ impl<T: OriginDimensions + DrawTarget> DrawTarget for Transformed<'_, T> {
 		I: IntoIterator<Item = Pixel<Self::Color>>,
 	{
 		let map = |pixel: Pixel<_>| {
-			let point = self.description.transform_point(pixel.0.into()).into();
-			Pixel(point, pixel.1)
+			let point = self.description.transform_point(pixel.0.into());
+			if self.description.base_rect.contains(point) {
+				Some(Pixel(point.into(), pixel.1))
+			} else {
+				None
+			}
 		};
-		self.base.draw_iter(pixels.into_iter().map(map))
+		self.base.draw_iter(pixels.into_iter().flat_map(map))
 	}
 
 	fn fill_solid(&mut self, area: &BadRect, color: Self::Color) -> Result<(), Self::Error> {
-		let area = self.description.transform_rect((*area).into());
+		let area = self
+			.description
+			.transform_rect((*area).into())
+			.intersection(&self.description.base_rect);
 		self.base.fill_solid(&area.into(), color)
 	}
 
@@ -135,7 +145,52 @@ impl<T: EinkUpdate> EinkUpdate for Transformed<'_, T> {
 mut_draw_target!(Transformed<'a, T>: ['a, T: OriginDimensions + DrawTarget]);
 
 #[derive(Debug, Serialize, Deserialize)]
+pub enum TouchPhase {
+	Start(rmox_input::touch::TouchState),
+	Change(rmox_input::touch::TouchState),
+	End,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TouchEvent {
+	pub id: rmox_input::touch::TouchId,
+	pub phase: TouchPhase,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum StylusPhase {
+	Hover(rmox_input::stylus::StylusState),
+	Touch(rmox_input::stylus::StylusState),
+	Change(rmox_input::stylus::StylusState),
+	Lift(rmox_input::stylus::StylusState),
+	Leave,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StylusEvent {
+	pub phase: StylusPhase,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum InputEvent {
+	Key(rmox_input::keyboard::KeyEvent),
+	Text(Box<str>),
+	Touch(TouchEvent),
+	Stylus(StylusEvent),
+	Button(rmox_input::keyboard::ButtonEvent),
+	// TODO: Does this make sense, and if so, how would we decide which tasks to send it to?
+	// DevicePresence(SupportedDeviceType),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Event {
-	Surface(SurfaceDescription),
+	Surface {
+		id: SurfaceId,
+		description: SurfaceDescription,
+	},
+	Input {
+		surface: SurfaceId,
+		event: InputEvent,
+	},
 	Quit,
 }

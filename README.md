@@ -8,7 +8,7 @@ Currently under active development. The API is not finalized.
 
 ## Usage
 
-There are currently `wm` and `test-app` binaries.
+There are currently `wm`, `bar-app`, and `events-app` binaries.
 In order to run them, I suggest the following workflow:
 
 1. Install a launcher capable of running `.draft` files.
@@ -21,8 +21,9 @@ call=sleep inf
 ```
 
 3. Run that `.draft` file from your launcher.
-4. To run the WM, use `./run-wm --control-socket /tmp/rmox.sock`.
-5. To run the test app, use `RMOX_SOCKET=/tmp/rmox.sock ./run-test-app`.
+4. Export `HOST` set to the IP/hostname of your device.
+4. To run the WM, use `./run-wm`.
+5. To run an app, use `./run-app <app name>`.
 
 ## License
 

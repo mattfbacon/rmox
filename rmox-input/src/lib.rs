@@ -22,6 +22,7 @@ use std::task::{Context, Poll};
 
 use evdev::{AbsoluteAxisCode, Device, EventStream, EventType, KeyCode};
 use futures_core::Stream;
+use serde::{Deserialize, Serialize};
 
 use crate::keyboard::key::{Key, Scancode};
 use crate::keyboard::modifiers::{Modifier, Modifiers};
@@ -43,12 +44,14 @@ pub enum Event {
 	DevicePresence(SupportedDeviceType),
 }
 
+#[derive(Debug)]
 struct Devices {
 	devices: [Option<EventStream>; SupportedDeviceType::ALL.len()],
 	last_polled_device: u8,
 	inotify: inotify::EventStream<[u8; 256]>,
 }
 
+#[derive(Debug)]
 struct InputState {
 	out_queue: VecDeque<Event>,
 
@@ -57,6 +60,7 @@ struct InputState {
 	stylus: crate::stylus::State,
 }
 
+#[derive(Debug)]
 pub struct Input {
 	devices: Devices,
 	state: InputState,
@@ -64,7 +68,7 @@ pub struct Input {
 
 macro_rules! device_types {
 	($($variant:ident,)*) => {
-		#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+		#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 		#[non_exhaustive]
 		pub enum SupportedDeviceType {
 			$($variant,)*

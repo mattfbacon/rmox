@@ -76,9 +76,10 @@ async fn main() {
 			Some(res) = events.next() => {
 				let event = res.unwrap();
 				match dbg!(event) {
-					Event::Surface(new_desc) => {
+					Event::Surface { id: _, description: new_desc } => {
 						desc = Some(new_desc);
 					}
+					Event::Input { .. } => continue,
 					Event::Quit => break,
 				}
 			}

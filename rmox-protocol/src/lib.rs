@@ -1,5 +1,10 @@
 pub mod io;
 
+// TODO: Niching with `NonZeroU32`.
+pub type Id = u32;
+pub type SurfaceId = Id;
+pub type TaskId = Id;
+
 pub mod client_to_server;
 pub mod server_to_client;
 

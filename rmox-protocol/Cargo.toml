@@ -8,6 +8,7 @@ ciborium = "0.2"
 embedded-graphics-core = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 rmox-common = { path = "../rmox-common" }
+rmox-input = { path = "../rmox-input" }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["io-util"] }
 tokio-stream = { version = "0.1", default-features = false }

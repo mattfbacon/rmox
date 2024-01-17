@@ -1,5 +1,6 @@
 use evdev::KeyCode;
 use rmox_common::types::{pos2, Pos2};
+use serde::{Deserialize, Serialize};
 
 use crate::Event;
 
@@ -8,7 +9,7 @@ pub struct StylusEvent {
 	pub phase: StylusPhase,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StylusPhase {
 	Hover,
 	Touch,
@@ -17,7 +18,7 @@ pub enum StylusPhase {
 	Leave,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StylusTool {
 	Pen,
 	Rubber,
@@ -46,7 +47,7 @@ enum InternalStylusEvent {
 	TiltY(i16),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct StylusState {
 	tool: StylusTool,
 	touching: bool,

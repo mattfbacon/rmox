@@ -1,2 +1,0 @@
-#!/bin/sh
-cross build --target armv7-unknown-linux-gnueabihf --release --all && rsync -vzh --progress ~/.cache/cargo/target/armv7-unknown-linux-gnueabihf/release/test-app root@10.0.0.249:/home/root/test-app && ssh -t root@10.0.0.249 env "RMOX_SOCKET=$RMOX_SOCKET" '/home/root/test-app'

@@ -34,6 +34,8 @@ impl Rectangle {
 		Self { origin, size }
 	}
 
+	#[inline]
+	#[must_use]
 	pub fn single(origin: Pos2) -> Self {
 		Self {
 			origin,
@@ -183,6 +185,8 @@ impl Rectangle {
 		self.size.is_empty()
 	}
 
+	#[inline]
+	#[must_use]
 	pub fn inset(&self, inset: i32) -> Self {
 		let inset = Vec2::splat(inset);
 		Self {
@@ -191,10 +195,17 @@ impl Rectangle {
 		}
 	}
 
+	#[inline]
 	pub fn scale_all(mut self, factor: i32) -> Self {
 		self.origin *= factor;
 		self.size *= factor;
 		self
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn contains(&self, point: Pos2) -> bool {
+		self.x_range().contains(&point.x) && self.y_range().contains(&point.y)
 	}
 }
 
@@ -220,6 +231,7 @@ impl Rectangle {
 	}
 
 	// TODO: A better implementation of this with a proper size hint, nameable type, and whatnot.
+	#[inline]
 	pub fn points(&self) -> impl Iterator<Item = Pos2> + Clone {
 		let x_range = self.x_range();
 		self.y_range().flat_map(move |y| {
@@ -230,6 +242,8 @@ impl Rectangle {
 }
 
 impl From<embedded_graphics_core::primitives::Rectangle> for Rectangle {
+	#[inline]
+	#[must_use]
 	fn from(lib: embedded_graphics_core::primitives::Rectangle) -> Self {
 		Self {
 			origin: lib.top_left.into(),
@@ -239,6 +253,8 @@ impl From<embedded_graphics_core::primitives::Rectangle> for Rectangle {
 }
 
 impl From<Rectangle> for embedded_graphics_core::primitives::Rectangle {
+	#[inline]
+	#[must_use]
 	fn from(our: Rectangle) -> Self {
 		let our = our.normalize();
 		Self {

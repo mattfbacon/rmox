@@ -1,5 +1,6 @@
 use evdev::EventSummary;
 use rmox_common::types::{pos2, Pos2};
+use serde::{Deserialize, Serialize};
 
 use crate::Event;
 
@@ -10,10 +11,10 @@ pub struct TouchEvent {
 }
 
 // Internal invariant: `self.0` is a valid index into `Input::touch_states`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TouchId(pub(crate) u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TouchPhase {
 	Start,
 	Change,
@@ -32,7 +33,7 @@ enum InternalTouchscreenEvent {
 	Orientation(i8),
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct TouchState {
 	x: u16,
 	y: u16,

@@ -1,4 +1,5 @@
 use evdev::EventSummary;
+use serde::{Deserialize, Serialize};
 
 pub use self::key::{Key, Scancode};
 use self::layout::{DefaultLayout, KeyboardLayout, Resolved};
@@ -9,7 +10,7 @@ pub mod key;
 pub mod layout;
 pub mod modifiers;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct KeyEvent {
 	pub scancode: Scancode,
 	pub key: Option<Key>,
@@ -17,13 +18,13 @@ pub struct KeyEvent {
 	pub modifiers: Modifiers,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ButtonEvent {
 	pub button: Button,
 	pub pressed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyEventKind {
 	Release,
 	Press,
@@ -59,7 +60,7 @@ impl KeyEventKind {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Button {
 	Power,
 }

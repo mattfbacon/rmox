@@ -1,4 +1,5 @@
 use enumset::{EnumSet, EnumSetType};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, EnumSetType)]
 #[enumset(no_ops)]
@@ -29,7 +30,7 @@ impl Modifier {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modifiers(EnumSet<Modifier>);
 
 impl Modifiers {
