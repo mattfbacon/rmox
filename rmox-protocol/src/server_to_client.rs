@@ -14,6 +14,7 @@ pub struct SurfaceDescription {
 	pub base_rect: Rectangle,
 	pub rotation: Rotation,
 	pub scale: u8,
+	pub visible: bool,
 }
 
 impl SurfaceDescription {
@@ -65,6 +66,7 @@ fn test_transform_point() {
 		base_rect: rect(200, 200, 500, 800),
 		rotation: Rotation::Rotate270,
 		scale: 2,
+		visible: true,
 	};
 	assert_eq!(desc.transform_point(pos2(0, 0)), pos2(200, 1000));
 	assert_eq!(desc.transform_point(pos2(10, 0)), pos2(200, 980));
@@ -80,6 +82,7 @@ fn test_transform_rect() {
 		base_rect: rect(200, 200, 1500, 1800),
 		rotation: Rotation::Rotate90,
 		scale: 2,
+		visible: true,
 	};
 	assert_eq!(desc.transform_rect(origin), rect(500, 400, 800, 600));
 }
@@ -104,6 +107,10 @@ impl<T: OriginDimensions + DrawTarget> DrawTarget for Transformed<'_, T> {
 	where
 		I: IntoIterator<Item = Pixel<Self::Color>>,
 	{
+		if !self.description.visible {
+			return Ok(());
+		}
+
 		let map = |pixel: Pixel<_>| {
 			let point = self.description.transform_point(pixel.0.into());
 			if self.description.base_rect.contains(point) {
@@ -116,6 +123,10 @@ impl<T: OriginDimensions + DrawTarget> DrawTarget for Transformed<'_, T> {
 	}
 
 	fn fill_solid(&mut self, area: &BadRect, color: Self::Color) -> Result<(), Self::Error> {
+		if !self.description.visible {
+			return Ok(());
+		}
+
 		let area = self
 			.description
 			.transform_rect((*area).into())
@@ -124,6 +135,10 @@ impl<T: OriginDimensions + DrawTarget> DrawTarget for Transformed<'_, T> {
 	}
 
 	fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+		if !self.description.visible {
+			return Ok(());
+		}
+
 		let rect = self.description.base_rect.into();
 		self.base.fill_solid(&rect, color)
 	}
@@ -172,6 +187,7 @@ pub struct StylusEvent {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum InputEvent {
+	// TODO: Keyboard focus enter and leave events, similar to wayland.
 	Key(rmox_input::keyboard::KeyEvent),
 	Text(Box<str>),
 	Touch(TouchEvent),
@@ -187,9 +203,9 @@ pub enum Event {
 		id: SurfaceId,
 		description: SurfaceDescription,
 	},
+	SurfaceQuit(SurfaceId),
 	Input {
 		surface: SurfaceId,
 		event: InputEvent,
 	},
-	Quit,
 }

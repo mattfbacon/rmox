@@ -1,2 +1,2 @@
 #!/bin/sh
-cross build --target armv7-unknown-linux-gnueabihf --release --all && rsync -vzh --progress ~/.cache/cargo/target/armv7-unknown-linux-gnueabihf/release/wm root@${HOST:?need HOST}:/home/root/wm && ssh -t root@$HOST -- '/home/root/wm' --control-socket /tmp/rmox.sock
+cross build --target armv7-unknown-linux-gnueabihf --release -p wm && rsync -vzh --progress ~/.cache/cargo/target/armv7-unknown-linux-gnueabihf/release/wm root@${HOST:?need HOST}:/home/root/wm && ssh -t root@$HOST -- '/home/root/wm' --control-socket /tmp/rmox.sock

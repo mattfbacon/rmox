@@ -7,6 +7,7 @@ edition = "2021"
 ciborium = "0.2"
 embedded-graphics-core = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+pin-project-lite = "0.2"
 rmox-common = { path = "../rmox-common" }
 rmox-input = { path = "../rmox-input" }
 serde = { version = "1", features = ["derive"] }

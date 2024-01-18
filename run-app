@@ -1,3 +1,3 @@
 #!/bin/sh
 appname=${1:?usage: ./run-app <app name>}
-cross build --target armv7-unknown-linux-gnueabihf --release --all && rsync -vzh --progress ~/.cache/cargo/target/armv7-unknown-linux-gnueabihf/release/"$appname" "root@${HOST:?need HOST}:/home/root/$appname" && ssh -t root@$HOST env "RMOX_SOCKET=/tmp/rmox.sock" "/home/root/$appname"
+cross build --target armv7-unknown-linux-gnueabihf --release -p "$appname" && rsync -vzh --progress ~/.cache/cargo/target/armv7-unknown-linux-gnueabihf/release/"$appname" "root@${HOST:?need HOST}:/home/root/$appname" && ssh -t root@$HOST env "RMOX_SOCKET=/tmp/rmox.sock" "/home/root/$appname"

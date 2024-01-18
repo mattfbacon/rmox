@@ -44,22 +44,19 @@ async fn main() {
 		.init();
 
 	let socket_path = std::env::var_os("RMOX_SOCKET").expect("missing RMOX_SOCKET env var");
-	let mut socket = tokio::net::UnixStream::connect(&socket_path)
+	let socket = tokio::net::UnixStream::connect(&socket_path)
 		.await
 		.unwrap_or_else(|error| panic!("connecting to {socket_path:?} (RMOX_SOCKET): {error}"));
-	let (socket_r, mut socket_w) = socket.split();
-	let events = rmox_protocol::io::read_stream::<_, Event>(socket_r);
-	pin!(events);
+	let socket = rmox_protocol::io::Stream::new(socket);
+	pin!(socket);
 
-	rmox_protocol::io::write(
-		&mut socket_w,
-		&Command::CreateSurface(SurfaceInit::Layer {
+	socket
+		.write(&Command::CreateSurface(SurfaceInit::Layer {
 			anchor: Side::Top,
 			size: 48,
-		}),
-	)
-	.await
-	.unwrap();
+		}))
+		.await
+		.unwrap();
 
 	let mut fb = Framebuffer::open().unwrap();
 
@@ -73,14 +70,15 @@ async fn main() {
 
 	loop {
 		select! {
-			Some(res) = events.next() => {
+			res = socket.next() => {
+				let Some(res) = res else { break; };
 				let event = res.unwrap();
 				match dbg!(event) {
 					Event::Surface { id: _, description: new_desc } => {
 						desc = Some(new_desc);
 					}
+					Event::SurfaceQuit(_id) => break,
 					Event::Input { .. } => continue,
-					Event::Quit => break,
 				}
 			}
 			_ = time_interval.tick() => {
@@ -92,6 +90,9 @@ async fn main() {
 		let Some(desc) = desc else {
 			continue;
 		};
+		if !desc.visible {
+			continue;
+		}
 
 		let mut fb = desc.transform(&mut fb);
 		let bounds = fb.bounding_box();

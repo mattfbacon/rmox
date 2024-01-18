@@ -7,6 +7,7 @@ use embedded_graphics::pixelcolor::Rgb565;
 use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_common::types::{Pos2, Rectangle, Rotation, Side};
 use rmox_fb::Framebuffer;
+use rmox_input::keyboard::Key;
 use rmox_input::Input;
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use rmox_protocol::server::send::{Event, InputEvent, SurfaceDescription};
@@ -15,7 +16,9 @@ use rmox_protocol::{Id, SurfaceId, TaskId};
 use tokio::sync::mpsc;
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
-use tracing_subscriber::filter::LevelFilter;
+
+// TODO: Some kind of wallpaper implementation so we can draw something to fill the space when surfaces are closed instead of just leaving whatever that surface last drew.
+// This could be based on a static image or, maybe better, implemented as a type of layer surface which receives or loses a surface as necessary.
 
 #[derive(Debug, Clone, Copy)]
 struct Surface {
@@ -36,25 +39,198 @@ struct ShellLayer {
 }
 
 #[derive(Debug)]
+enum ContainerKind {
+	Horizontal,
+	Vertical,
+}
+
+#[derive(Debug)]
+struct Container {
+	kind: ContainerKind,
+	children: Vec<ShellNode>,
+}
+
+impl Container {
+	fn retain(&mut self, f: &mut impl FnMut(SurfaceId) -> bool) -> bool {
+		self.children.retain_mut(|child| child.retain(f));
+		!self.children.is_empty()
+	}
+
+	fn fix_path(&self, path: &mut Vec<u8>, i: usize) {
+		let container_index = if let Some(&index) = path.get(i) {
+			index
+		} else {
+			// Arbitrary choice.
+			let index = 0;
+			path.push(index);
+			index
+		};
+		let child = if let Some(child) = self.children.get(usize::from(container_index)) {
+			child
+		} else {
+			path[i] = (self.children.len() - 1).try_into().unwrap();
+			// We assert that containers have at least one item.
+			self.children.last().unwrap()
+		};
+		child.fix_path(path, i + 1);
+	}
+
+	fn get_path(&self, path: &[u8]) -> Option<&ShellNode> {
+		let [index, rest @ ..] = path else {
+			// Path is not deep enough.
+			return None;
+		};
+
+		match &self.children[usize::from(*index)] {
+			ShellNode::Container(container) => container.get_path(rest),
+			// If `None`, path is too deep.
+			node @ ShellNode::Surface(_) => rest.is_empty().then_some(node),
+		}
+	}
+
+	fn get_container_mut(&mut self, path: &[u8]) -> Option<&mut Self> {
+		let [index, rest @ ..] = path else {
+			return Some(self);
+		};
+
+		match &mut self.children[usize::from(*index)] {
+			ShellNode::Container(container) => container.get_container_mut(rest),
+			// Path is too deep.
+			ShellNode::Surface(_) => None,
+		}
+	}
+}
+
+#[derive(Debug)]
+enum ShellNode {
+	Container(Container),
+	Surface(SurfaceId),
+}
+
+impl ShellNode {
+	/// The returned `bool` indicates if this node itself should be retained.
+	fn retain(&mut self, f: &mut impl FnMut(SurfaceId) -> bool) -> bool {
+		match self {
+			Self::Container(container) => container.retain(f),
+			Self::Surface(id) => f(*id),
+		}
+	}
+
+	fn fix_path(&self, path: &mut Vec<u8>, i: usize) {
+		match self {
+			Self::Surface(_) => {
+				path.truncate(i + 1);
+			}
+			Self::Container(container) => container.fix_path(path, i),
+		}
+	}
+}
+
+#[derive(Debug)]
 struct Shell {
 	layers: Vec<ShellLayer>,
-	// TODO: Tree of containers.
-	root: Vec<SurfaceId>,
+	root: Option<Container>,
+}
+
+impl Shell {
+	fn retain(&mut self, mut f: impl FnMut(SurfaceId) -> bool) {
+		self.layers.retain(|layer| f(layer.surface));
+		if let Some(root) = &mut self.root {
+			if !root.retain(&mut f) {
+				self.root = None;
+			}
+		}
+	}
+
+	fn get_path(&self, path: &[u8]) -> Option<&ShellNode> {
+		let root = self.root.as_ref()?;
+		root.get_path(path)
+	}
+
+	fn fix_path(&mut self, path: &mut Option<Vec<u8>>) {
+		if let Some(root) = &mut self.root {
+			if let Some(path) = path {
+				root.fix_path(path, 0);
+			}
+		} else {
+			*path = None;
+		}
+	}
+}
+
+#[derive(Debug)]
+struct ManagerConfig {
+	global_rotation: Rotation,
+	inset: i32,
+}
+
+#[derive(Debug)]
+struct ManagerState {
+	config: ManagerConfig,
+
+	id_counter: Id,
+
+	surfaces: HashMap<SurfaceId, Surface>,
+	tasks: HashMap<TaskId, Task>,
+	// The `Vec` represents a path into `shell.root` where each item is an index into the children of a container, e.g., `Some(vec![1])` is the second child of the root container.
+	keyboard_focused_container: Option<Vec<u8>>,
+}
+
+impl ManagerState {
+	fn next_id(&mut self) -> Id {
+		let ret = self.id_counter;
+		self.id_counter = self.id_counter.wrapping_add(1);
+		ret
+	}
+
+	fn reassign_container(
+		&mut self,
+		container: &Container,
+		rect: &Rectangle,
+		dirty_surfaces: &mut Vec<SurfaceId>,
+	) {
+		tracing::trace!(?rect, "reassignment - reassign container");
+		let child_side = match container.kind {
+			ContainerKind::Horizontal => Side::Left,
+			ContainerKind::Vertical => Side::Top,
+		}
+		.rotate(self.config.global_rotation);
+		let child_size = match child_side {
+			Side::Top | Side::Bottom => rect.size.y,
+			Side::Left | Side::Right => rect.size.x,
+		} / i32::try_from(container.children.len()).unwrap();
+		let mut rect = *rect;
+		for child in &container.children[..container.children.len() - 1] {
+			let child_rect = child_side.take(child_size, &mut rect);
+			self.reassign_node(child, &child_rect, dirty_surfaces);
+		}
+		self.reassign_node(container.children.last().unwrap(), &rect, dirty_surfaces);
+	}
+
+	fn reassign_node(
+		&mut self,
+		node: &ShellNode,
+		rect: &Rectangle,
+		dirty_surfaces: &mut Vec<SurfaceId>,
+	) {
+		tracing::trace!(?rect, "reassignment - reassign node");
+		match node {
+			ShellNode::Container(container) => self.reassign_container(container, rect, dirty_surfaces),
+			ShellNode::Surface(id) => {
+				let surface = self.surfaces.get_mut(id).unwrap();
+				if surface.description.base_rect != *rect {
+					dirty_surfaces.push(*id);
+				}
+				surface.description.base_rect = *rect;
+			}
+		}
+	}
 }
 
 #[derive(Debug)]
 struct Manager {
-	global_rotation: Rotation,
-	inset: i32,
-
-	id_counter: Id,
-	surfaces: HashMap<SurfaceId, Surface>,
-	tasks: HashMap<TaskId, Task>,
-
-	keyboard_focused_surface: Option<SurfaceId>,
-
+	state: ManagerState,
 	shell: Shell,
-
 	input: Input,
 }
 
@@ -70,55 +246,63 @@ struct ManagerHandle {
 
 // TODO: Avoid unwraps when getting tasks and surfaces by IDs.
 impl Manager {
-	fn new(global_rotation: Rotation, inset: i32) -> std::io::Result<Self> {
+	fn new(config: ManagerConfig) -> std::io::Result<Self> {
 		Ok(Self {
-			global_rotation,
-			inset,
+			state: ManagerState {
+				config,
 
-			id_counter: 1,
-			surfaces: HashMap::new(),
-			tasks: HashMap::new(),
+				id_counter: 1,
 
-			keyboard_focused_surface: None,
-
+				surfaces: HashMap::new(),
+				tasks: HashMap::new(),
+				keyboard_focused_container: None,
+			},
 			shell: Shell {
 				layers: Vec::new(),
-				root: Vec::new(),
+				root: None,
 			},
-
 			input: Input::open()?,
 		})
 	}
 
-	fn next_id(&mut self) -> Id {
-		let ret = self.id_counter;
-		self.id_counter = self.id_counter.wrapping_add(1);
-		ret
-	}
-
 	fn prune_shell(&mut self) {
+		tracing::trace!(?self.shell, ?self.state.keyboard_focused_container, "prune shell - before");
 		self
 			.shell
-			.layers
-			.retain(|layer| self.surfaces.contains_key(&layer.surface));
+			.retain(|surface| self.state.surfaces.contains_key(&surface));
 		self
 			.shell
-			.root
-			.retain(|surface| self.surfaces.contains_key(surface));
+			.fix_path(&mut self.state.keyboard_focused_container);
+		tracing::trace!(?self.shell, ?self.state.keyboard_focused_container, "prune shell - after");
 	}
 
 	fn remove_task_(&mut self, id: TaskId) {
-		self.tasks.remove(&id);
-		self.surfaces.retain(|_, surface| surface.task != id);
-
+		let Some(_) = self.state.tasks.remove(&id) else {
+			return;
+		};
+		self.state.surfaces.retain(|_, surface| surface.task != id);
 		self.prune_shell();
+	}
 
+	async fn remove_surface(&mut self, id: SurfaceId) {
+		let Some(surface) = self.state.surfaces.remove(&id) else {
+			return;
+		};
 		if self
-			.keyboard_focused_surface
-			.map_or(false, |id| !self.surfaces.contains_key(&id))
+			.state
+			.tasks
+			.get(&surface.task)
+			.unwrap()
+			.channel
+			.send(Event::SurfaceQuit(id))
+			.await
+			.is_err()
 		{
-			self.keyboard_focused_surface = self.shell.root.last().copied();
+			self.remove_task(id).await;
+			return;
 		}
+		self.prune_shell();
+		self.reassign_areas().await;
 	}
 
 	/// Since the removal of the task's surfaces may affect layout, this calls `reassign_areas`.
@@ -127,98 +311,76 @@ impl Manager {
 		self.reassign_areas().await;
 	}
 
-	// TODO: Avoid the duplication of the interior of the `for` loops.
 	async fn reassign_areas(&mut self) {
+		tracing::trace!("reassign areas");
+		let mut dirty_surfaces = Vec::new();
 		'outer: loop {
-			let mut rect = Rectangle::new(Pos2::ZERO, Framebuffer::SIZE).inset(self.inset);
+			dirty_surfaces.clear();
+
+			let mut rect = Rectangle::new(Pos2::ZERO, Framebuffer::SIZE).inset(self.state.config.inset);
 
 			for layer in &self.shell.layers {
+				tracing::trace!(?layer, "reassignment - processing layer");
 				let surface_id = layer.surface;
-				let surface = self.surfaces.get_mut(&surface_id).unwrap();
-				let old = surface.description.base_rect;
-				surface.description.base_rect = layer.anchor.take(layer.size, &mut rect);
-				if old != surface.description.base_rect {
-					let task_id = surface.task;
-					let task = self.tasks.get_mut(&task_id).unwrap();
-					let event = Event::Surface {
-						id: surface_id,
-						description: surface.description,
-					};
-					if task.channel.send(event).await.is_err() {
-						self.remove_task_(task_id);
-						// We need to restart the assignment because previously processed surfaces may have also been owned by this task and thus removed.
-						// The check for a differing `base_rect` should avoid repetition of surface assignments to clients.
-						// Nonetheless it is somewhat suboptimal if the `send` fails later in this process,
-						// because removal of other earlier surfaces might cause some tasks to be assigned different surfaces in quick succession.
-						continue 'outer;
-					}
+				let new_rect = layer.anchor.take(layer.size, &mut rect);
+				let surface = self.state.surfaces.get_mut(&surface_id).unwrap();
+				if new_rect != surface.description.base_rect {
+					dirty_surfaces.push(surface_id);
 				}
+				surface.description.base_rect = new_rect;
 			}
 
-			if self.shell.root.is_empty() {
-				return;
-			}
+			if let Some(root) = &self.shell.root {
+				self
+					.state
+					.reassign_container(root, &rect, &mut dirty_surfaces);
+			};
 
-			// For now this is hard-coded as an N-way horizontal split.
-			let num_roots = self.shell.root.len();
-			let root_width = self
-				.global_rotation
-				.transform_size(Framebuffer::SIZE)
-				.x
-				.abs() / i32::try_from(num_roots).unwrap();
-			for (i, &root) in self.shell.root.iter().enumerate() {
-				let surface_id = root;
-				let surface = self.surfaces.get_mut(&surface_id).unwrap();
-				let this_rect = if i + 1 == num_roots {
-					rect
-				} else {
-					Side::Left
-						.rotate(self.global_rotation)
-						.take(root_width, &mut rect)
+			tracing::trace!(num_dirty=?dirty_surfaces.len(), "processing dirty surfaces");
+			for &surface_id in &dirty_surfaces {
+				let surface = self.state.surfaces.get(&surface_id).unwrap();
+				tracing::trace!(?surface_id, ?surface, "processing dirty surface");
+				let task_id = surface.task;
+				let task = self.state.tasks.get(&task_id).unwrap();
+				let event = Event::Surface {
+					id: surface_id,
+					description: surface.description,
 				};
-
-				let old = surface.description.base_rect;
-				surface.description.base_rect = this_rect;
-				if old != surface.description.base_rect {
-					let task_id = surface.task;
-					let task = self.tasks.get_mut(&task_id).unwrap();
-					let event = Event::Surface {
-						id: surface_id,
-						description: surface.description,
-					};
-					if task.channel.send(event).await.is_err() {
-						self.remove_task_(task_id);
-						continue 'outer;
-					}
+				if task.channel.send(event).await.is_err() {
+					self.remove_task_(task_id);
+					// We need to restart the assignment because previously processed surfaces may have also been owned by this task and thus removed.
+					// The check for a differing `base_rect` should avoid repetition of surface assignments to clients.
+					// Nonetheless it is somewhat suboptimal if the `send` fails later in this process,
+					// because removal of other earlier surfaces might cause some tasks to be assigned different surfaces in quick succession.
+					tracing::trace!("task had to be removed while reassigning, repeating reassignment");
+					continue 'outer;
 				}
 			}
-
 			break;
 		}
 	}
 
 	async fn spawn_task(
 		&mut self,
-		mut client: tokio::net::UnixStream,
+		client: tokio::net::UnixStream,
 		handle: ManagerHandle,
 	) -> (TaskId, mpsc::Sender<Event>) {
 		let (event_send, mut event_recv) = mpsc::channel(2);
-		let task_id = self.next_id();
+		let task_id = self.state.next_id();
 		tokio::spawn(async move {
-			let (client_r, mut client_w) = client.split();
-			let commands = rmox_protocol::io::read_stream::<_, Command>(client_r);
-			pin!(commands);
+			let client = rmox_protocol::io::Stream::new(client);
+			pin!(client);
 			loop {
 				select! {
 					Some(event) = event_recv.recv() => {
 						tracing::debug!(?task_id, ?event, "received event for client");
-						let res = rmox_protocol::io::write(&mut client_w, &event).await;
+						let res = client.write(&event).await;
 						if let Err(error) = res {
 							tracing::warn!(?task_id, ?error, "error writing to client");
 							break;
 						}
 					}
-					res = commands.next() => {
+					res = client.next() => {
 						match res {
 							Some(Ok(command)) => {
 								tracing::debug!(?task_id, ?command, "received command from client");
@@ -241,7 +403,7 @@ impl Manager {
 			handle.remove_task(task_id).await;
 		});
 
-		self.tasks.insert(
+		self.state.tasks.insert(
 			task_id,
 			Task {
 				channel: event_send.clone(),
@@ -252,21 +414,23 @@ impl Manager {
 	}
 
 	async fn create_surface(&mut self, task: TaskId, options: SurfaceInit) {
-		let surface_id = self.next_id();
+		tracing::trace!(?task, ?options, "create surface");
+		let surface_id = self.state.next_id();
 		let surface = Surface {
 			description: SurfaceDescription {
 				// Will be set by `reassign_areas`.
 				base_rect: Rectangle::ZERO,
-				rotation: self.global_rotation,
+				rotation: self.state.config.global_rotation,
 				scale: 1,
+				visible: true,
 			},
 			task,
 		};
-		self.surfaces.insert(surface_id, surface);
+		self.state.surfaces.insert(surface_id, surface);
 
 		match options {
 			SurfaceInit::Layer { anchor, size } => {
-				let anchor = anchor.rotate(self.global_rotation);
+				let anchor = anchor.rotate(self.state.config.global_rotation);
 				self.shell.layers.push(ShellLayer {
 					anchor,
 					size,
@@ -274,20 +438,68 @@ impl Manager {
 				});
 			}
 			SurfaceInit::Normal => {
-				self.shell.root.push(surface_id);
 				// As a rule, we consider normal surfaces to be keyboard-focusable and layer surfaces to not be.
 				// We may change this if necessary, e.g., for dmenu-type things.
-				self.keyboard_focused_surface = Some(surface_id);
+
+				if let Some(root) = &mut self.shell.root {
+					let path = self.state.keyboard_focused_container.as_mut().unwrap();
+					// Get the container of the currently focused node by removing the last path segment.
+					let container = root.get_container_mut(&path[..path.len() - 1]).unwrap();
+					container.children.push(ShellNode::Surface(surface_id));
+					*path.last_mut().unwrap() = (container.children.len() - 1).try_into().unwrap();
+				} else {
+					self.shell.root = Some(Container {
+						kind: ContainerKind::Horizontal,
+						children: vec![ShellNode::Surface(surface_id)],
+					});
+					self.state.keyboard_focused_container = Some(vec![0]);
+				}
 			}
 		}
 
 		self.reassign_areas().await;
 	}
 
+	// TODO: If a parent container of a surface is focused,
+	// there may be some situations where we want to force the focus to one of the child surfaces,
+	// e.g., if the user types on the keyboard.
+	// Not sure if jumping to a child surface is better or worse than ignoring the keyboard input entirely.
+	fn focused_surface(&self) -> Option<SurfaceId> {
+		if let Some(ShellNode::Surface(surface_id)) = self
+			.state
+			.keyboard_focused_container
+			.as_deref()
+			.and_then(|path| self.shell.get_path(path))
+		{
+			Some(*surface_id)
+		} else {
+			None
+		}
+	}
+
 	async fn handle_input(&mut self, event: rmox_input::Event) {
+		// TODO: This kind of thing should be handled by a dedicated daemon and some kind of hotkey reservation protocol.
+		if let rmox_input::Event::Key(event) = &event {
+			if event.event.press() {
+				if let Some(surface_id) = self.focused_surface() {
+					if let Some(key) = event.key {
+						match key {
+							Key::X if event.modifiers.opt() && event.modifiers.shift(false) => {
+								tracing::trace!(?surface_id, "M-S-x, removing surface");
+								self.remove_surface(surface_id).await;
+								return;
+							}
+							// TODO: Bindings for changing container kind, selecting parent container, and changing focus.
+							_ => {}
+						}
+					}
+				}
+			}
+		}
+
 		let surface_id = match &event {
 			rmox_input::Event::Key(_) | rmox_input::Event::Text(_) | rmox_input::Event::Button(_) => {
-				let Some(surface_id) = self.keyboard_focused_surface else {
+				let Some(surface_id) = self.focused_surface() else {
 					return;
 				};
 				surface_id
@@ -333,9 +545,9 @@ impl Manager {
 			}),
 			rmox_input::Event::DevicePresence(_) => return,
 		};
-		let surface = self.surfaces.get(&surface_id).unwrap();
+		let surface = self.state.surfaces.get(&surface_id).unwrap();
 		let task_id = surface.task;
-		let task = self.tasks.get(&task_id).unwrap();
+		let task = self.state.tasks.get(&task_id).unwrap();
 		let event = Event::Input {
 			surface: surface_id,
 			event,
@@ -358,42 +570,6 @@ impl ManagerHandle {
 	}
 }
 
-/*
-async fn test_task(mut channel: mpsc::Receiver<Event>) {
-	let mut fb = Framebuffer::open().unwrap();
-
-	while let Some(event) = channel.recv().await {
-		match event {
-			Event::Surface(desc) => {
-				let mut fb = desc.transform(&mut fb);
-				let rect = fb.bounding_box().into_styled(
-					PrimitiveStyleBuilder::new()
-						.fill_color(Rgb565::new(31, 63, 31))
-						.stroke_color(Rgb565::new(0, 0, 0))
-						.stroke_width(4)
-						.stroke_alignment(StrokeAlignment::Inside)
-						.build(),
-				);
-				rect.draw(&mut fb).unwrap();
-				let line_style = PrimitiveStyleBuilder::new()
-					.stroke_color(Rgb565::new(0, 0, 0))
-					.stroke_width(2)
-					.stroke_alignment(StrokeAlignment::Center)
-					.reset_fill_color()
-					.build();
-				Polyline::new(&[Point::new(20, 20), Point::new(40, 30), Point::new(20, 40)])
-					.into_styled(line_style)
-					.draw(&mut fb)
-					.unwrap();
-				fb.update_partial(&rect.bounding_box().into(), UpdateStyle::Monochrome)
-					.unwrap();
-			}
-			Event::Quit => break,
-		}
-	}
-}
-*/
-
 /// Run the window manager.
 #[derive(argh::FromArgs, Debug)]
 struct Args {
@@ -404,9 +580,7 @@ struct Args {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-	tracing_subscriber::fmt::fmt()
-		.with_max_level(LevelFilter::INFO)
-		.init();
+	tracing_subscriber::fmt::init();
 
 	tracing::info!("starting");
 
@@ -424,7 +598,11 @@ async fn main() {
 	std::thread::sleep(Duration::from_millis(500));
 	tracing::info!("cleared");
 
-	let mut manager = Manager::new(Rotation::Rotate90, 4).unwrap();
+	let config = ManagerConfig {
+		global_rotation: Rotation::Rotate90,
+		inset: 4,
+	};
+	let mut manager = Manager::new(config).unwrap();
 
 	let (command_send, mut command_recv) = mpsc::channel(2);
 
@@ -464,23 +642,6 @@ async fn main() {
 					}
 				};
 				tracing::trace!(?event, "input event through WM");
-				/*
-				// TODO: This kind of thing should be handled by a dedicated daemon and some kind of hotkey reservation protocol.
-				match &event {
-					rmox_input::Event::Key(rmox_input::keyboard::KeyEvent {
-						scancode: _,
-						key: Some(key),
-						event: KeyEventKind::Press,
-						modifiers,
-					}) => match key {
-						Key::Enter if modifiers.opt() => {
-							manager.open(test_task, SurfaceInit::Normal).await;
-						}
-						_ => {}
-					},
-					_ => {}
-				}
-				*/
 				manager.handle_input(event).await;
 			}
 		}

@@ -592,6 +592,7 @@ dependencies = [
  "ciborium",
  "embedded-graphics-core",
  "futures-util",
+ "pin-project-lite",
  "rmox-common",
  "rmox-input",
  "serde",

@@ -12,7 +12,7 @@ use rmox_fb::util::Scaled;
 use rmox_fb::Framebuffer;
 use rmox_protocol::client::recv::Event;
 use rmox_protocol::server::recv::{Command, SurfaceInit};
-use tokio::{pin, select};
+use tokio::pin;
 use tokio_stream::StreamExt as _;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -25,14 +25,14 @@ async fn main() {
 		.init();
 
 	let socket_path = std::env::var_os("RMOX_SOCKET").expect("missing RMOX_SOCKET env var");
-	let mut socket = tokio::net::UnixStream::connect(&socket_path)
+	let socket = tokio::net::UnixStream::connect(&socket_path)
 		.await
 		.unwrap_or_else(|error| panic!("connecting to {socket_path:?} (RMOX_SOCKET): {error}"));
-	let (socket_r, mut socket_w) = socket.split();
-	let events = rmox_protocol::io::read_stream::<_, Event>(socket_r);
-	pin!(events);
+	let socket = rmox_protocol::io::Stream::new(socket);
+	pin!(socket);
 
-	rmox_protocol::io::write(&mut socket_w, &Command::CreateSurface(SurfaceInit::Normal))
+	socket
+		.write(&Command::CreateSurface(SurfaceInit::Normal))
 		.await
 		.unwrap();
 
@@ -45,25 +45,33 @@ async fn main() {
 
 	loop {
 		let mut just_last_line = true;
-		select! {
-			Some(res) = events.next() => {
-				let event = res.unwrap();
-				match event {
-					Event::Surface { id: _, description: new_desc } => {
-						desc = Some(new_desc);
-						just_last_line = false;
-					}
-					Event::Input { surface: _, event: input } => {
-						writeln!(input_buf, "{input:?}").unwrap();
-					}
-					Event::Quit => break,
-				}
+		let Some(res) = socket.next().await else {
+			break;
+		};
+		let event = res.unwrap();
+		match event {
+			Event::Surface {
+				id: _,
+				description: new_desc,
+			} => {
+				desc = Some(new_desc);
+				just_last_line = false;
+			}
+			Event::SurfaceQuit(_id) => break,
+			Event::Input {
+				surface: _,
+				event: input,
+			} => {
+				writeln!(input_buf, "{input:?}").unwrap();
 			}
 		}
 
 		let Some(desc) = desc else {
 			continue;
 		};
+		if !desc.visible {
+			continue;
+		}
 
 		let mut fb = desc.transform(&mut fb);
 
