@@ -178,7 +178,7 @@ struct ManagerState {
 impl ManagerState {
 	fn next_id(&mut self) -> Id {
 		let ret = self.id_counter;
-		self.id_counter = self.id_counter.wrapping_add(1);
+		self.id_counter = self.id_counter.step();
 		ret
 	}
 
@@ -250,7 +250,7 @@ impl Manager {
 			state: ManagerState {
 				config,
 
-				id_counter: 1,
+				id_counter: Id::START,
 
 				surfaces: HashMap::new(),
 				tasks: HashMap::new(),
@@ -288,17 +288,10 @@ impl Manager {
 		let Some(surface) = self.state.surfaces.remove(&id) else {
 			return Err(());
 		};
-		if self
-			.state
-			.tasks
-			.get(&surface.task)
-			.unwrap()
-			.channel
-			.send(Event::SurfaceQuit(id))
-			.await
-			.is_err()
-		{
-			self.remove_task(id).await;
+		let task_id = surface.task;
+		let task = self.state.tasks.get(&task_id).unwrap();
+		if task.channel.send(Event::SurfaceQuit(id)).await.is_err() {
+			self.remove_task(task_id).await;
 			return Err(());
 		}
 
@@ -383,7 +376,7 @@ impl Manager {
 		handle: ManagerHandle,
 	) -> (TaskId, mpsc::Sender<Event>) {
 		let (event_send, mut event_recv) = mpsc::channel(2);
-		let task_id = self.state.next_id();
+		let task_id = TaskId(self.state.next_id());
 		tokio::spawn(async move {
 			let client = rmox_protocol::io::Stream::new(client);
 			pin!(client);
@@ -432,7 +425,7 @@ impl Manager {
 
 	async fn create_surface(&mut self, task: TaskId, options: SurfaceInit) {
 		tracing::trace!(?task, ?options, "create surface");
-		let surface_id = self.state.next_id();
+		let surface_id = SurfaceId(self.state.next_id());
 		let surface = Surface {
 			description: SurfaceDescription {
 				// Will be set by `reassign_areas`.
