@@ -90,7 +90,11 @@ where
 					let mut read_buf = ReadBuf::new(buf.buf);
 					read_buf.set_filled(buf.prev_len);
 					if let Err(error) = ready!(this.inner.as_mut().poll_read(cx, &mut read_buf)) {
-						return Poll::Ready(Some(Err(error.into())));
+						return Poll::Ready(if error.kind() == std::io::ErrorKind::ConnectionReset {
+							None
+						} else {
+							Some(Err(error.into()))
+						});
 					}
 					let read = read_buf.filled();
 					if read.len() == buf.prev_len {
