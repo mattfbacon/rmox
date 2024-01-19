@@ -1,9 +1,12 @@
+#[cfg(feature = "input-impl")]
 use evdev::EventSummary;
 use serde::{Deserialize, Serialize};
 
 pub use self::key::{Key, Scancode};
+#[cfg(feature = "input-impl")]
 use self::layout::{DefaultLayout, Layout, Resolved};
 pub use self::modifiers::{Modifier, Modifiers};
+#[cfg(feature = "input-impl")]
 use crate::Event;
 
 pub mod key;
@@ -65,8 +68,9 @@ pub enum Button {
 	Power,
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug)]
-pub struct State {
+pub(crate) struct State {
 	keyboard_layout: Box<dyn Layout>,
 	modifiers: Modifiers,
 	/// This is a map from `Scancode` to `Option<Key>`.
@@ -76,6 +80,7 @@ pub struct State {
 	held_keys: [Option<Key>; Scancode::ALL.len()],
 }
 
+#[cfg(feature = "input-impl")]
 impl Default for State {
 	fn default() -> Self {
 		Self {
@@ -86,6 +91,7 @@ impl Default for State {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl State {
 	fn update_modifier(&mut self, modifier: Modifier, event: KeyEventKind) {
 		if modifier.is_toggle() {
@@ -151,6 +157,7 @@ impl State {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 pub(crate) fn handle_events(
 	events: impl IntoIterator<Item = evdev::InputEvent>,
 	state: &mut crate::InputState,
@@ -174,6 +181,7 @@ pub(crate) fn handle_events(
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl crate::Input {
 	#[inline]
 	#[must_use]
@@ -182,11 +190,13 @@ impl crate::Input {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug, Clone)]
 pub struct PressedKeys<'a> {
 	held_keys: std::iter::Enumerate<std::slice::Iter<'a, Option<Key>>>,
 }
 
+#[cfg(feature = "input-impl")]
 impl crate::Input {
 	#[inline]
 	#[must_use]
@@ -197,12 +207,14 @@ impl crate::Input {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PressedKey {
 	pub scancode: Scancode,
 	pub key: Key,
 }
 
+#[cfg(feature = "input-impl")]
 impl Iterator for PressedKeys<'_> {
 	type Item = PressedKey;
 

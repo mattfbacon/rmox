@@ -8,7 +8,7 @@ argh = "0.1"
 embedded-graphics = { workspace = true }
 rmox-common = { path = "../rmox-common" }
 rmox-fb = { path = "../rmox-fb" }
-rmox-input = { path = "../rmox-input" }
+rmox-input = { path = "../rmox-input", features = ["input-impl"] }
 rmox-protocol = { path = "../rmox-protocol" }
 time = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "time", "signal"] }

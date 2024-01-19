@@ -12,6 +12,7 @@ macro_rules! scancode_and_key {
 		}
 
 		impl Scancode {
+			#[cfg(feature = "input-impl")]
 			#[must_use]
 			pub(crate) fn from_evdev(raw: evdev::KeyCode) -> Option<Self> {
 				Some(match raw {

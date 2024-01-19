@@ -16,3 +16,6 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = { version = "0.1", default-features = false }
 tracing = { workspace = true }
+
+[features]
+input-impl = []

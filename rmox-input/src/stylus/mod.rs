@@ -1,3 +1,4 @@
+#[cfg(feature = "input-impl")]
 use evdev::KeyCode;
 use rmox_common::types::{pos2, Pos2};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ pub enum Tool {
 	Rubber,
 }
 
+#[cfg(feature = "input-impl")]
 impl Tool {
 	#[must_use]
 	fn from_evdev(key: KeyCode) -> Option<Self> {
@@ -31,18 +33,6 @@ impl Tool {
 			_ => return None,
 		})
 	}
-}
-
-#[derive(Debug, Clone, Copy)]
-enum InternalEvent {
-	Tool(Option<Tool>),
-	Touch(bool),
-	PositionX(u16),
-	PositionY(u16),
-	Pressure(u16),
-	Distance(u8),
-	TiltX(i16),
-	TiltY(i16),
 }
 
 #[allow(clippy::module_name_repetitions)] // `State` is already taken.
@@ -109,13 +99,26 @@ impl StylusState {
 	}
 }
 
-pub type State = Option<StylusState>;
+#[cfg(feature = "input-impl")]
+pub(crate) type State = Option<StylusState>;
 
+#[cfg(feature = "input-impl")]
 pub(crate) fn handle_events(
 	events: impl IntoIterator<Item = evdev::InputEvent>,
 	input: &mut crate::InputState,
 ) {
 	use evdev::{AbsoluteAxisCode as A, EventSummary as S};
+	#[derive(Debug, Clone, Copy)]
+	enum InternalEvent {
+		Tool(Option<Tool>),
+		Touch(bool),
+		PositionX(u16),
+		PositionY(u16),
+		Pressure(u16),
+		Distance(u8),
+		TiltX(i16),
+		TiltY(i16),
+	}
 	use InternalEvent as E;
 
 	let state = &mut input.stylus;
@@ -194,6 +197,7 @@ pub(crate) fn handle_events(
 	input.enqueue(crate::Event::Stylus(Event { phase }));
 }
 
+#[cfg(feature = "input-impl")]
 impl crate::Input {
 	#[inline]
 	#[must_use]

@@ -16,6 +16,7 @@ pub enum Modifier {
 
 impl Modifier {
 	/// Does pressing this key toggle the modifier as opposed to momentarily activating it?
+	#[cfg(feature = "input-impl")]
 	#[must_use]
 	pub(crate) fn is_toggle(self) -> bool {
 		match self {

@@ -15,12 +15,18 @@
 #![warn(clippy::pedantic)]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "input-impl")]
 use std::collections::VecDeque;
+#[cfg(feature = "input-impl")]
 use std::path::Path;
+#[cfg(feature = "input-impl")]
 use std::pin::Pin;
+#[cfg(feature = "input-impl")]
 use std::task::{Context, Poll};
 
+#[cfg(feature = "input-impl")]
 use evdev::{AbsoluteAxisCode, Device, EventStream, EventType, KeyCode};
+#[cfg(feature = "input-impl")]
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +50,7 @@ pub enum Event {
 	DevicePresence(SupportedDeviceType),
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug)]
 struct Devices {
 	#[allow(clippy::struct_field_names)] // False positive, not a prefix or suffix.
@@ -52,6 +59,7 @@ struct Devices {
 	inotify: inotify::EventStream<[u8; 256]>,
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug)]
 struct InputState {
 	out_queue: VecDeque<Event>,
@@ -61,6 +69,7 @@ struct InputState {
 	stylus: crate::stylus::State,
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug)]
 pub struct Input {
 	devices: Devices,
@@ -88,6 +97,7 @@ device_types! {
 	Keyboard,
 }
 
+#[cfg(feature = "input-impl")]
 fn detect_device_type(device: &Device) -> Option<SupportedDeviceType> {
 	// Based on https://github.com/Eeems-Org/oxide/blob/1c997c4e9470feec08e4748942f17e517c5efa49/shared/liboxide/liboxide.cpp#L138-L170.
 	if device
@@ -113,8 +123,10 @@ fn detect_device_type(device: &Device) -> Option<SupportedDeviceType> {
 	None
 }
 
+#[cfg(feature = "input-impl")]
 const INPUT_DIR: &str = "/dev/input";
 
+#[cfg(feature = "input-impl")]
 impl Input {
 	/// # Errors
 	///
@@ -149,6 +161,7 @@ impl Input {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl Devices {
 	fn enumerate(&mut self) -> std::io::Result<()> {
 		tracing::debug!("Input::new, performing initial enumeration");
@@ -186,12 +199,14 @@ impl Devices {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl InputState {
 	fn enqueue(&mut self, event: Event) {
 		self.out_queue.push_back(event);
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl Input {
 	#[inline]
 	#[must_use]
@@ -200,6 +215,7 @@ impl Input {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl Stream for Input {
 	type Item = std::io::Result<Event>;
 

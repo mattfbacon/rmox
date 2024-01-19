@@ -1,3 +1,4 @@
+#[cfg(feature = "input-impl")]
 use evdev::EventSummary;
 use rmox_common::types::{pos2, Pos2};
 use serde::{Deserialize, Serialize};
@@ -17,18 +18,6 @@ pub enum Phase {
 	Start,
 	Change,
 	End,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum InternalEvent {
-	Slot(u8),
-	TouchEnd,
-	PositionX(u16),
-	PositionY(u16),
-	Pressure(u8),
-	TouchMajor(u8),
-	TouchMinor(u8),
-	Orientation(i8),
 }
 
 #[allow(clippy::module_name_repetitions)] // `State` is already taken.
@@ -76,13 +65,15 @@ impl TouchState {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 #[derive(Debug)]
-pub struct State {
+pub(crate) struct State {
 	/// Invariant: `states.get(slot).is_some()`.
 	slot: u8,
 	states: [Option<TouchState>; 32],
 }
 
+#[cfg(feature = "input-impl")]
 #[allow(clippy::derivable_impls)] // Clarity.
 impl Default for State {
 	fn default() -> Self {
@@ -93,6 +84,7 @@ impl Default for State {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl State {
 	fn current(&mut self) -> Option<(usize, &mut Option<TouchState>)> {
 		let index = usize::from(self.slot);
@@ -108,11 +100,23 @@ impl State {
 	}
 }
 
+#[cfg(feature = "input-impl")]
 pub(crate) fn handle_events(
 	events: impl IntoIterator<Item = evdev::InputEvent>,
 	input: &mut crate::InputState,
 ) {
 	use evdev::AbsoluteAxisCode as A;
+	#[derive(Debug, Clone, Copy)]
+	enum InternalEvent {
+		Slot(u8),
+		TouchEnd,
+		PositionX(u16),
+		PositionY(u16),
+		Pressure(u8),
+		TouchMajor(u8),
+		TouchMinor(u8),
+		Orientation(i8),
+	}
 	use InternalEvent as E;
 
 	let state = &mut input.touch;
@@ -202,6 +206,7 @@ pub(crate) fn handle_events(
 	}
 }
 
+#[cfg(feature = "input-impl")]
 impl crate::Input {
 	#[inline]
 	#[must_use]
