@@ -12,7 +12,6 @@ use rmox_protocol::client::recv::Event;
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
-use tracing_subscriber::filter::LevelFilter;
 
 struct Battery {
 	percentage: u32,
@@ -39,9 +38,7 @@ fn get_battery() -> Battery {
 async fn main() {
 	eprintln!("starting");
 
-	tracing_subscriber::fmt::fmt()
-		.with_max_level(LevelFilter::INFO)
-		.init();
+	tracing_subscriber::fmt::init();
 
 	let socket_path = std::env::var_os("RMOX_SOCKET").expect("missing RMOX_SOCKET env var");
 	let socket = tokio::net::UnixStream::connect(&socket_path)
