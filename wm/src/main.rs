@@ -284,9 +284,9 @@ impl Manager {
 		self.prune_shell();
 	}
 
-	async fn remove_surface_(&mut self, id: SurfaceId) {
+	async fn remove_surface_(&mut self, id: SurfaceId) -> Result<(), ()> {
 		let Some(surface) = self.state.surfaces.remove(&id) else {
-			return;
+			return Err(());
 		};
 		if self
 			.state
@@ -299,14 +299,17 @@ impl Manager {
 			.is_err()
 		{
 			self.remove_task(id).await;
-			return;
+			return Err(());
 		}
+
+		Ok(())
 	}
 
-	async fn remove_surface(&mut self, id: SurfaceId) {
-		self.remove_surface_(id).await;
+	async fn remove_surface(&mut self, id: SurfaceId) -> Result<(), ()> {
+		self.remove_surface_(id).await?;
 		self.prune_shell();
 		self.reassign_areas().await;
+		Ok(())
 	}
 
 	/// Since the removal of the task's surfaces may affect layout, this calls `reassign_areas`.
@@ -472,7 +475,7 @@ impl Manager {
 			SurfaceInit::Wallpaper => {
 				let old = self.shell.wallpaper.replace(surface_id);
 				if let Some(old) = old {
-					self.remove_surface(old).await;
+					_ = self.remove_surface(old).await;
 				}
 			}
 		}
@@ -506,7 +509,7 @@ impl Manager {
 						match key {
 							Key::X if event.modifiers.opt() && event.modifiers.shift(false) => {
 								tracing::trace!(?surface_id, "M-S-x, removing surface");
-								self.remove_surface(surface_id).await;
+								_ = self.remove_surface(surface_id).await;
 								return;
 							}
 							// TODO: Bindings for changing container kind, selecting parent container, and changing focus.
