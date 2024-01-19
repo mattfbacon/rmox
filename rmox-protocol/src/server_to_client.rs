@@ -36,7 +36,7 @@ impl SurfaceDescription {
 
 		rect.origin += self.base_rect.origin.to_vec();
 
-		rect
+		rect.intersection(&self.base_rect)
 	}
 
 	#[inline]
@@ -127,10 +127,7 @@ impl<T: OriginDimensions + DrawTarget> DrawTarget for Transformed<'_, T> {
 			return Ok(());
 		}
 
-		let area = self
-			.description
-			.transform_rect((*area).into())
-			.intersection(&self.description.base_rect);
+		let area = self.description.transform_rect((*area).into());
 		self.base.fill_solid(&area.into(), color)
 	}
 
