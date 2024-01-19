@@ -67,20 +67,24 @@ impl Rotation {
 fn test_transform_point() {
 	use crate::types::{pos2, vec2};
 
-	let container = vec2(300, 300);
-	let origin = pos2(100, 200);
+	let container = vec2(3, 3);
+	let origin = pos2(1, 2);
 	assert_eq!(Rotation::None.transform_point(origin, container), origin);
 	assert_eq!(
 		Rotation::Rotate90.transform_point(origin, container),
-		pos2(100, 100)
+		pos2(1, 1)
 	);
 	assert_eq!(
 		Rotation::Rotate180.transform_point(origin, container),
-		pos2(200, 100),
+		pos2(2, 1),
 	);
 	assert_eq!(
 		Rotation::Rotate270.transform_point(origin, container),
-		pos2(200, 200),
+		pos2(2, 2),
+	);
+	assert_eq!(
+		Rotation::Rotate270.transform_point(pos2(0, 0), container),
+		pos2(0, 3),
 	);
 }
 
@@ -88,9 +92,9 @@ fn test_transform_point() {
 fn test_transform_rect() {
 	use crate::types::{rect, vec2};
 
-	let r = rect(0, 0, 100, 200);
+	let r = rect(0, 0, 1, 2);
 	assert_eq!(
-		Rotation::Rotate270.transform_rect(r, &vec2(300, 300)),
-		rect(0, 200, 200, 100),
+		Rotation::Rotate270.transform_rect(r, &vec2(3, 3)),
+		rect(0, 2, 2, 1),
 	);
 }
