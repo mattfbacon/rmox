@@ -229,16 +229,74 @@ impl Rectangle {
 	pub fn y_range(&self) -> Range<i32> {
 		order_range(self.origin.y..(self.origin.y + self.size.y))
 	}
+}
 
-	// TODO: A better implementation of this with a proper size hint, nameable type, and whatnot.
-	#[inline]
-	pub fn points(&self) -> impl Iterator<Item = Pos2> + Clone {
-		let x_range = self.x_range();
-		self.y_range().flat_map(move |y| {
-			let x_range = x_range.clone();
-			x_range.map(move |x| Pos2 { x, y })
-		})
+#[derive(Debug, Clone)]
+pub struct Points {
+	rect: Rectangle,
+	point: Pos2,
+}
+
+impl Iterator for Points {
+	type Item = Pos2;
+
+	fn next(&mut self) -> Option<Pos2> {
+		if !self.rect.contains(self.point) {
+			return None;
+		}
+
+		let ret = self.point;
+		self.point.x += 1;
+		if self.point.x >= self.rect.end().x {
+			self.point.x = self.rect.origin.x;
+			self.point.y += 1;
+		}
+
+		Some(ret)
 	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		if !self.rect.contains(self.point) {
+			return (0, Some(0));
+		}
+
+		let remaining_size = self.rect.end() - self.point;
+		// All of the values are guaranteed to be non-negative since we've normalized `rect`
+		// and `point` will always either be inside `rect` or one past the end on the Y-axis (handled above).
+		let remaining = usize::try_from(remaining_size.x).unwrap()
+			+ usize::try_from(remaining_size.y - 1).unwrap() * usize::try_from(self.rect.size.x).unwrap();
+		(remaining, Some(remaining))
+	}
+}
+
+impl Rectangle {
+	/// Iterate over all the points of this rectangle.
+	///
+	/// Always iterates row-major from the top-left of the normalized rectangle.
+	#[inline]
+	pub fn points(self) -> Points {
+		let rect = self.normalize();
+		Points {
+			rect,
+			point: rect.origin,
+		}
+	}
+}
+
+#[test]
+fn test_points() {
+	use crate::types::pos2;
+
+	let mut iter = rect(4, 2, -2, 2).points();
+	let mut points = Vec::new();
+	let mut remaining = 4;
+	assert_eq!(iter.size_hint(), (remaining, Some(remaining)));
+	while let Some(point) = iter.next() {
+		remaining -= 1;
+		assert_eq!(iter.size_hint(), (remaining, Some(remaining)));
+		points.push(point);
+	}
+	assert_eq!(points, [pos2(2, 2), pos2(3, 2), pos2(2, 3), pos2(3, 3)]);
 }
 
 impl From<embedded_graphics_core::primitives::Rectangle> for Rectangle {
