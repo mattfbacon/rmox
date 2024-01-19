@@ -2,7 +2,7 @@ use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::Vec2;
+use crate::types::{Rectangle, Side, Vec2};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Pos2 {
@@ -44,6 +44,33 @@ impl Pos2 {
 			x: std::cmp::max(self.x, other.x),
 			y: std::cmp::max(self.y, other.y),
 		}
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn with_x(self, x: i32) -> Self {
+		Self { x, ..self }
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn with_y(self, y: i32) -> Self {
+		Self { y, ..self }
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn offset(self, toward: Side, offset: i32) -> Self {
+		self + toward.vec_toward() * offset
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn wrap_within(self, container: &Rectangle) -> Self {
+		let mut offset = self - container.origin;
+		offset.x = offset.x.rem_euclid(container.size.x);
+		offset.y = offset.y.rem_euclid(container.size.y);
+		container.origin + offset
 	}
 }
 

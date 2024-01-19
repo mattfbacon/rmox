@@ -47,7 +47,7 @@ impl Channel {
 
 		tracing::debug!(?rect, ?style, ?depth, "channel update");
 
-		let rect = rect.normalize().intersection(&Framebuffer::RECT);
+		let rect = rect.intersection(&Framebuffer::RECT);
 		if rect.is_empty() {
 			return Ok(());
 		}

@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Pos2, Vec2};
+use crate::types::{Pos2, Side, Vec2};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Rectangle {
@@ -166,8 +166,15 @@ impl Rectangle {
 	#[must_use]
 	pub fn intersection(&self, other: &Self) -> Self {
 		let top_left = Pos2::max_components(self.top_left(), other.top_left());
-		let bottom_right = Pos2::max_components(self.bottom_right(), other.bottom_right());
-		Self::from_corners(top_left, bottom_right)
+		let bottom_right = Pos2::min_components(self.bottom_right(), other.bottom_right());
+
+		let mut ret = Self::from_corners(top_left, bottom_right);
+
+		// A negative size indicates no intersection.
+		ret.size.x = ret.size.x.max(0);
+		ret.size.y = ret.size.y.max(0);
+
+		ret
 	}
 
 	#[inline]
@@ -206,6 +213,47 @@ impl Rectangle {
 	#[must_use]
 	pub fn contains(&self, point: Pos2) -> bool {
 		self.x_range().contains(&point.x) && self.y_range().contains(&point.y)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn center(&self) -> Pos2 {
+		((self.origin.to_vec() + self.end().to_vec()) / 2).to_pos()
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn top(&self) -> i32 {
+		std::cmp::min(self.origin.y, self.end().y)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn bottom(&self) -> i32 {
+		std::cmp::max(self.origin.y, self.end().y)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn left(&self) -> i32 {
+		std::cmp::min(self.origin.x, self.end().x)
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn right(&self) -> i32 {
+		std::cmp::max(self.origin.x, self.end().x)
+	}
+
+	#[must_use]
+	pub fn midpoint(&self, side: Side) -> Pos2 {
+		let center = self.center();
+		match side {
+			Side::Top => center.with_y(self.top()),
+			Side::Bottom => center.with_y(self.bottom()),
+			Side::Left => center.with_x(self.left()),
+			Side::Right => center.with_x(self.right()),
+		}
 	}
 }
 

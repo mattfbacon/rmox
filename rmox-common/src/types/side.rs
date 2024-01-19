@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Rectangle, Rotation};
+use crate::types::{vec2, Rectangle, Rotation, Vec2};
 
 crate::macros::enum_all! {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -46,6 +46,17 @@ impl Side {
 				from.origin.x += amount;
 				ret
 			}
+		}
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn vec_toward(self) -> Vec2 {
+		match self {
+			Self::Top => vec2(0, -1),
+			Self::Right => vec2(1, 0),
+			Self::Bottom => vec2(0, 1),
+			Self::Left => vec2(-1, 0),
 		}
 	}
 }

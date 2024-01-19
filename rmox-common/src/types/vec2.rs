@@ -18,6 +18,18 @@ impl Vec2 {
 	pub const fn splat(v: i32) -> Self {
 		Self { x: v, y: v }
 	}
+
+	#[inline]
+	#[must_use]
+	pub fn with_x(self, x: i32) -> Self {
+		Self { x, ..self }
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn with_y(self, y: i32) -> Self {
+		Self { y, ..self }
+	}
 }
 
 #[inline]
