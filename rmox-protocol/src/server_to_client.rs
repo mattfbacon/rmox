@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::SurfaceId;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SurfaceDescription {
 	pub base_rect: Rectangle,
 	pub rotation: Rotation,

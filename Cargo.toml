@@ -1,12 +1,15 @@
 [workspace]
 members = [
-	"bar-app",
-	"events-app",
 	"rmox-common",
 	"rmox-fb",
 	"rmox-input",
 	"rmox-protocol",
+
 	"wm",
+
+	"bar-app",
+	"events-app",
+	"wallpaper-app",
 ]
 resolver = "2"
 

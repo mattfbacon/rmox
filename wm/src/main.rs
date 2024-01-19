@@ -17,9 +17,6 @@ use tokio::sync::mpsc;
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
 
-// TODO: Some kind of wallpaper implementation so we can draw something to fill the space when surfaces are closed instead of just leaving whatever that surface last drew.
-// This could be based on a static image or, maybe better, implemented as a type of layer surface which receives or loses a surface as necessary.
-
 #[derive(Debug, Clone, Copy)]
 struct Surface {
 	description: SurfaceDescription,
@@ -130,6 +127,7 @@ impl ShellNode {
 struct Shell {
 	layers: Vec<ShellLayer>,
 	root: Option<Container>,
+	wallpaper: Option<SurfaceId>,
 }
 
 impl Shell {
@@ -140,6 +138,7 @@ impl Shell {
 				self.root = None;
 			}
 		}
+		self.wallpaper = self.wallpaper.filter(|id| f(*id));
 	}
 
 	fn get_path(&self, path: &[u8]) -> Option<&ShellNode> {
@@ -260,6 +259,7 @@ impl Manager {
 			shell: Shell {
 				layers: Vec::new(),
 				root: None,
+				wallpaper: None,
 			},
 			input: Input::open()?,
 		})
@@ -284,7 +284,7 @@ impl Manager {
 		self.prune_shell();
 	}
 
-	async fn remove_surface(&mut self, id: SurfaceId) {
+	async fn remove_surface_(&mut self, id: SurfaceId) {
 		let Some(surface) = self.state.surfaces.remove(&id) else {
 			return;
 		};
@@ -301,6 +301,10 @@ impl Manager {
 			self.remove_task(id).await;
 			return;
 		}
+	}
+
+	async fn remove_surface(&mut self, id: SurfaceId) {
+		self.remove_surface_(id).await;
 		self.prune_shell();
 		self.reassign_areas().await;
 	}
@@ -328,6 +332,16 @@ impl Manager {
 					dirty_surfaces.push(surface_id);
 				}
 				surface.description.base_rect = new_rect;
+			}
+
+			if let Some(wallpaper) = self.shell.wallpaper {
+				let surface = self.state.surfaces.get_mut(&wallpaper).unwrap();
+				let old = surface.description;
+				surface.description.base_rect = rect;
+				surface.description.visible = self.shell.root.is_none();
+				if old != surface.description {
+					dirty_surfaces.push(wallpaper);
+				}
 			}
 
 			if let Some(root) = &self.shell.root {
@@ -438,7 +452,7 @@ impl Manager {
 				});
 			}
 			SurfaceInit::Normal => {
-				// As a rule, we consider normal surfaces to be keyboard-focusable and layer surfaces to not be.
+				// As a rule, we consider normal surfaces to be keyboard-focusable and any others to not be.
 				// We may change this if necessary, e.g., for dmenu-type things.
 
 				if let Some(root) = &mut self.shell.root {
@@ -453,6 +467,12 @@ impl Manager {
 						children: vec![ShellNode::Surface(surface_id)],
 					});
 					self.state.keyboard_focused_container = Some(vec![0]);
+				}
+			}
+			SurfaceInit::Wallpaper => {
+				let old = self.shell.wallpaper.replace(surface_id);
+				if let Some(old) = old {
+					self.remove_surface(old).await;
 				}
 			}
 		}

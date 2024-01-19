@@ -843,6 +843,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
 
 [[package]]
+name = "wallpaper-app"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "rmox-common",
+ "rmox-fb",
+ "rmox-input",
+ "rmox-protocol",
+ "time",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

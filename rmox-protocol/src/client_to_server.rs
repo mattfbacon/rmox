@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum SurfaceInit {
 	Layer { anchor: Side, size: i32 },
 	Normal,
+	Wallpaper,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
