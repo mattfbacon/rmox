@@ -4,7 +4,7 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::primitives::PointsIter as _;
 use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_fb::Framebuffer;
-use rmox_protocol::client::recv::Event;
+use rmox_protocol::client::recv::{Event, SurfaceEvent};
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use tokio::pin;
 use tokio_stream::StreamExt as _;
@@ -32,9 +32,11 @@ async fn main() {
 	while let Some(res) = socket.next().await {
 		let event = res.unwrap();
 		let desc = match event {
-			Event::Surface { id: _, description } => description,
-			Event::SurfaceQuit(_id) => break,
-			Event::Input { .. } => continue,
+			Event::Surface { id: _, event } => match event {
+				SurfaceEvent::Description(desc) => desc,
+				SurfaceEvent::Quit => break,
+				SurfaceEvent::Input(..) => continue,
+			},
 		};
 
 		if !desc.visible {

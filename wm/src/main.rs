@@ -10,7 +10,7 @@ use rmox_fb::Framebuffer;
 use rmox_input::keyboard::Key;
 use rmox_input::Input;
 use rmox_protocol::server::recv::{Command, SurfaceInit};
-use rmox_protocol::server::send::{Event, InputEvent, SurfaceDescription};
+use rmox_protocol::server::send::{Event, InputEvent, SurfaceDescription, SurfaceEvent};
 use rmox_protocol::server_to_client::{StylusEvent, StylusPhase, TouchEvent, TouchPhase};
 use rmox_protocol::{Id, SurfaceId, TaskId};
 use tokio::sync::mpsc;
@@ -290,7 +290,15 @@ impl Manager {
 		};
 		let task_id = surface.task;
 		let task = self.state.tasks.get(&task_id).unwrap();
-		if task.channel.send(Event::SurfaceQuit(id)).await.is_err() {
+		if task
+			.channel
+			.send(Event::Surface {
+				id,
+				event: SurfaceEvent::Quit,
+			})
+			.await
+			.is_err()
+		{
 			self.remove_task(task_id).await;
 			return Err(());
 		}
@@ -354,7 +362,7 @@ impl Manager {
 				let task = self.state.tasks.get(&task_id).unwrap();
 				let event = Event::Surface {
 					id: surface_id,
-					description: surface.description,
+					event: SurfaceEvent::Description(surface.description),
 				};
 				if task.channel.send(event).await.is_err() {
 					self.remove_task_(task_id);
@@ -564,9 +572,9 @@ impl Manager {
 		let surface = self.state.surfaces.get(&surface_id).unwrap();
 		let task_id = surface.task;
 		let task = self.state.tasks.get(&task_id).unwrap();
-		let event = Event::Input {
-			surface: surface_id,
-			event,
+		let event = Event::Surface {
+			id: surface_id,
+			event: SurfaceEvent::Input(event),
 		};
 		if task.channel.send(event).await.is_err() {
 			self.remove_task(task_id).await;

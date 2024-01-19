@@ -198,14 +198,13 @@ pub enum InputEvent {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub enum SurfaceEvent {
+	Description(SurfaceDescription),
+	Quit,
+	Input(InputEvent),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Event {
-	Surface {
-		id: SurfaceId,
-		description: SurfaceDescription,
-	},
-	SurfaceQuit(SurfaceId),
-	Input {
-		surface: SurfaceId,
-		event: InputEvent,
-	},
+	Surface { id: SurfaceId, event: SurfaceEvent },
 }

@@ -10,7 +10,7 @@ use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_common::types::Rectangle;
 use rmox_fb::util::Scaled;
 use rmox_fb::Framebuffer;
-use rmox_protocol::client::recv::Event;
+use rmox_protocol::client::recv::{Event, SurfaceEvent};
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use tokio::pin;
 use tokio_stream::StreamExt as _;
@@ -47,20 +47,16 @@ async fn main() {
 		};
 		let event = res.unwrap();
 		match event {
-			Event::Surface {
-				id: _,
-				description: new_desc,
-			} => {
-				desc = Some(new_desc);
-				just_last_line = false;
-			}
-			Event::SurfaceQuit(_id) => break,
-			Event::Input {
-				surface: _,
-				event: input,
-			} => {
-				writeln!(input_buf, "{input:?}").unwrap();
-			}
+			Event::Surface { id: _, event } => match event {
+				SurfaceEvent::Description(new_desc) => {
+					desc = Some(new_desc);
+					just_last_line = false;
+				}
+				SurfaceEvent::Quit => break,
+				SurfaceEvent::Input(input) => {
+					writeln!(input_buf, "{input:?}").unwrap();
+				}
+			},
 		}
 
 		let Some(desc) = desc else {

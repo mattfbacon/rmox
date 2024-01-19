@@ -8,7 +8,7 @@ use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_common::types::Side;
 use rmox_fb::util::Scaled;
 use rmox_fb::Framebuffer;
-use rmox_protocol::client::recv::Event;
+use rmox_protocol::client::recv::{Event, SurfaceEvent};
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
@@ -71,11 +71,13 @@ async fn main() {
 				let Some(res) = res else { break; };
 				let event = res.unwrap();
 				match dbg!(event) {
-					Event::Surface { id: _, description: new_desc } => {
-						desc = Some(new_desc);
+					Event::Surface { id: _, event } => match event {
+						SurfaceEvent::Description(new_desc) => {
+							desc = Some(new_desc);
+						}
+						SurfaceEvent::Quit => break,
+						SurfaceEvent::Input(..) => continue,
 					}
-					Event::SurfaceQuit(_id) => break,
-					Event::Input { .. } => continue,
 				}
 			}
 			_ = time_interval.tick() => {
