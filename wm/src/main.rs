@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use embedded_graphics::pixelcolor::Rgb565;
 use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_common::types::{Pos2, Rectangle, Rotation, Side};
 use rmox_fb::Framebuffer;
-use rmox_input::keyboard::Key;
+use rmox_input::keyboard::{Key, KeyEvent};
 use rmox_input::Input;
 use rmox_protocol::server::recv::{Command, SurfaceInit};
 use rmox_protocol::server::send::{Event, InputEvent, SurfaceDescription, SurfaceEvent};
@@ -43,6 +44,7 @@ enum ContainerKind {
 
 #[derive(Debug)]
 struct Container {
+	rect: Rectangle,
 	kind: ContainerKind,
 	children: Vec<ShellNode>,
 }
@@ -53,7 +55,7 @@ impl Container {
 		!self.children.is_empty()
 	}
 
-	fn fix_path(&self, path: &mut Vec<u8>, i: usize) {
+	fn fix_path(&self, path: &mut Path, i: usize) {
 		let container_index = if let Some(&index) = path.get(i) {
 			index
 		} else {
@@ -96,6 +98,32 @@ impl Container {
 			ShellNode::Surface(_) => None,
 		}
 	}
+
+	fn point_to_path(
+		&self,
+		point: Pos2,
+		path: &mut Vec<u8>,
+		surface_rect: impl Fn(SurfaceId) -> Rectangle,
+	) -> bool {
+		for (i, child) in self.children.iter().enumerate() {
+			match child {
+				ShellNode::Container(container) => {
+					if container.rect.contains(point) {
+						path.push(i.try_into().unwrap());
+						return container.point_to_path(point, path, surface_rect);
+					}
+				}
+				ShellNode::Surface(id) => {
+					if surface_rect(*id).contains(point) {
+						path.push(i.try_into().unwrap());
+						return true;
+					}
+				}
+			}
+		}
+
+		false
+	}
 }
 
 #[derive(Debug)]
@@ -113,7 +141,7 @@ impl ShellNode {
 		}
 	}
 
-	fn fix_path(&self, path: &mut Vec<u8>, i: usize) {
+	fn fix_path(&self, path: &mut Path, i: usize) {
 		match self {
 			Self::Surface(_) => {
 				path.truncate(i + 1);
@@ -146,7 +174,7 @@ impl Shell {
 		root.get_path(path)
 	}
 
-	fn fix_path(&mut self, path: &mut Option<Vec<u8>>) {
+	fn fix_path(&mut self, path: &mut Option<Path>) {
 		if let Some(root) = &mut self.root {
 			if let Some(path) = path {
 				root.fix_path(path, 0);
@@ -155,13 +183,29 @@ impl Shell {
 			*path = None;
 		}
 	}
+
+	fn point_to_path(
+		&self,
+		point: Pos2,
+		surface_rect: impl Fn(SurfaceId) -> Rectangle,
+	) -> Option<Path> {
+		let root = self.root.as_ref()?;
+		// We ignore layers and wallpaper as paths can't refer to them and they can't be focused (yet).
+		let mut path = Vec::new();
+		(root.rect.contains(point) && root.point_to_path(point, &mut path, surface_rect))
+			.then_some(path)
+	}
 }
 
 #[derive(Debug)]
 struct ManagerConfig {
 	global_rotation: Rotation,
 	inset: i32,
+	control_socket: OsString,
 }
+
+/// The `Vec` represents a path into `shell.root` where each item is an index into the children of a container, e.g., `Some(vec![1])` is the second child of the root container.
+type Path = Vec<u8>;
 
 #[derive(Debug)]
 struct ManagerState {
@@ -171,8 +215,7 @@ struct ManagerState {
 
 	surfaces: HashMap<SurfaceId, Surface>,
 	tasks: HashMap<TaskId, Task>,
-	// The `Vec` represents a path into `shell.root` where each item is an index into the children of a container, e.g., `Some(vec![1])` is the second child of the root container.
-	keyboard_focused_container: Option<Vec<u8>>,
+	keyboard_focused_container: Option<Path>,
 }
 
 impl ManagerState {
@@ -184,11 +227,12 @@ impl ManagerState {
 
 	fn reassign_container(
 		&mut self,
-		container: &Container,
+		container: &mut Container,
 		rect: &Rectangle,
 		dirty_surfaces: &mut Vec<SurfaceId>,
 	) {
 		tracing::trace!(?rect, "reassignment - reassign container");
+		container.rect = *rect;
 		let child_side = match container.kind {
 			ContainerKind::Horizontal => Side::Left,
 			ContainerKind::Vertical => Side::Top,
@@ -199,16 +243,21 @@ impl ManagerState {
 			Side::Left | Side::Right => rect.size.x,
 		} / i32::try_from(container.children.len()).unwrap();
 		let mut rect = *rect;
-		for child in &container.children[..container.children.len() - 1] {
+		let len = container.children.len();
+		for child in &mut container.children[..len - 1] {
 			let child_rect = child_side.take(child_size, &mut rect);
 			self.reassign_node(child, &child_rect, dirty_surfaces);
 		}
-		self.reassign_node(container.children.last().unwrap(), &rect, dirty_surfaces);
+		self.reassign_node(
+			container.children.last_mut().unwrap(),
+			&rect,
+			dirty_surfaces,
+		);
 	}
 
 	fn reassign_node(
 		&mut self,
-		node: &ShellNode,
+		node: &mut ShellNode,
 		rect: &Rectangle,
 		dirty_surfaces: &mut Vec<SurfaceId>,
 	) {
@@ -348,7 +397,7 @@ impl Manager {
 				}
 			}
 
-			if let Some(root) = &self.shell.root {
+			if let Some(root) = &mut self.shell.root {
 				self
 					.state
 					.reassign_container(root, &rect, &mut dirty_surfaces);
@@ -467,6 +516,8 @@ impl Manager {
 					*path.last_mut().unwrap() = (container.children.len() - 1).try_into().unwrap();
 				} else {
 					self.shell.root = Some(Container {
+						// Will be set by `reassign_areas`.
+						rect: Rectangle::ZERO,
 						kind: ContainerKind::Horizontal,
 						children: vec![ShellNode::Surface(surface_id)],
 					});
@@ -501,22 +552,99 @@ impl Manager {
 		}
 	}
 
+	async fn move_focus(&mut self, mut direction: Side) {
+		direction = direction.rotate(self.state.config.global_rotation);
+		if let Some(root) = &mut self.shell.root {
+			if let Some(path) = &self.state.keyboard_focused_container {
+				if let Some(node) = root.get_path(path) {
+					let rect = match node {
+						ShellNode::Container(container) => container.rect,
+						ShellNode::Surface(id) => self.state.surfaces.get(id).unwrap().description.base_rect,
+					};
+					let test_point = rect
+						.midpoint(direction)
+						.offset(direction, 1)
+						.wrap_within(&root.rect);
+					if let Some(path) = self.shell.point_to_path(test_point, |id| {
+						self.state.surfaces.get(&id).unwrap().description.base_rect
+					}) {
+						self.state.keyboard_focused_container = Some(path);
+					} else {
+						tracing::warn!(?test_point, "point_to_path returned None");
+					}
+				}
+			}
+		}
+	}
+
 	async fn handle_input(&mut self, event: rmox_input::Event) {
 		// TODO: This kind of thing should be handled by a dedicated daemon and some kind of hotkey reservation protocol.
-		if let rmox_input::Event::Key(event) = &event {
+		if let rmox_input::Event::Key(event @ KeyEvent { key: Some(key), .. }) = &event {
 			if event.event.press() {
-				if let Some(surface_id) = self.focused_surface() {
-					if let Some(key) = event.key {
-						match key {
-							Key::X if event.modifiers.opt() && event.modifiers.shift(false) => {
-								tracing::trace!(?surface_id, "M-S-x, removing surface");
-								_ = self.remove_surface(surface_id).await;
-								return;
+				match key {
+					Key::X if event.modifiers.opt() && event.modifiers.shift(false) => {
+						let focused = self.focused_surface();
+						tracing::trace!(?focused, "M-S-q, removing surface");
+						if let Some(surface_id) = focused {
+							_ = self.remove_surface(surface_id).await;
+						}
+						return;
+					}
+					Key::D if event.modifiers.opt() => {
+						tracing::trace!("M-e, changing container kind");
+						if let Some(root) = &mut self.shell.root {
+							if let Some(path) = &self.state.keyboard_focused_container {
+								// TODO: If a container itself is focused, this might be wrong.
+								if let Some(container) = root.get_container_mut(&path[..path.len() - 1]) {
+									container.kind = match container.kind {
+										ContainerKind::Horizontal => ContainerKind::Vertical,
+										ContainerKind::Vertical => ContainerKind::Horizontal,
+									};
+									self.reassign_areas().await;
+								}
 							}
-							// TODO: Bindings for changing container kind, selecting parent container, and changing focus.
-							_ => {}
+						}
+						return;
+					}
+					Key::ArrowRight if event.modifiers.opt() => {
+						tracing::trace!("M-right, moving focus right");
+						self.move_focus(Side::Right).await;
+						return;
+					}
+					Key::ArrowLeft if event.modifiers.opt() => {
+						tracing::trace!("M-left, moving focus left");
+						self.move_focus(Side::Left).await;
+						return;
+					}
+					Key::ArrowUp if event.modifiers.opt() => {
+						tracing::trace!("M-up, moving focus up");
+						self.move_focus(Side::Top).await;
+						return;
+					}
+					Key::ArrowDown if event.modifiers.opt() => {
+						tracing::trace!("M-down, moving focus down");
+						self.move_focus(Side::Bottom).await;
+						return;
+					}
+					Key::Enter if event.modifiers.opt() => {
+						tracing::trace!("M-enter, launching test app");
+						// TODO: When we implement a terminal, this should launch that instead.
+						match std::process::Command::new("/home/root/events-app")
+							.env("RMOX_SOCKET", &self.state.config.control_socket)
+							.spawn()
+						{
+							Ok(mut child) => {
+								std::thread::spawn(move || {
+									_ = child.wait();
+								});
+							}
+							Err(error) => {
+								tracing::error!(?error, "error spawning events app");
+							}
 						}
 					}
+					// TODO: Bindings for focusing parent/child container, creating nested containers.
+					_ => {}
 				}
 			}
 		}
@@ -625,6 +753,7 @@ async fn main() {
 	let config = ManagerConfig {
 		global_rotation: Rotation::Rotate90,
 		inset: 4,
+		control_socket: args.control_socket.into(),
 	};
 	let mut manager = Manager::new(config).unwrap();
 
