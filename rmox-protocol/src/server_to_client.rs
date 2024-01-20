@@ -29,8 +29,10 @@ impl SurfaceDescription {
 
 	#[inline]
 	pub fn transform_rect(&self, mut rect: Rectangle) -> Rectangle {
-		rect.origin *= self.scale.into();
-		rect.size *= self.scale.into();
+		let scale: i32 = self.scale.into();
+
+		rect.origin *= scale;
+		rect.size *= scale;
 
 		rect = self.rotation.transform_rect(rect, &self.base_rect.size);
 
@@ -44,7 +46,7 @@ impl SurfaceDescription {
 	pub fn size(&self) -> Vec2 {
 		let mut size = self.base_rect.size;
 		size = self.rotation.inverse().transform_size(size).abs();
-		size /= self.scale.into();
+		size /= i32::from(self.scale);
 		size
 	}
 

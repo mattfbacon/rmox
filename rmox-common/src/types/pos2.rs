@@ -21,6 +21,12 @@ impl Pos2 {
 
 	#[inline]
 	#[must_use]
+	pub const fn splat(v: i32) -> Self {
+		Self { x: v, y: v }
+	}
+
+	#[inline]
+	#[must_use]
 	pub const fn to_vec(self) -> Vec2 {
 		Vec2 {
 			x: self.x,

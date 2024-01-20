@@ -101,6 +101,27 @@ impl MulAssign<i32> for Vec2 {
 	}
 }
 
+impl Mul<Vec2> for Vec2 {
+	type Output = Self;
+
+	#[inline]
+	#[must_use]
+	fn mul(self, scale: Vec2) -> Self {
+		Self {
+			x: self.x * scale.x,
+			y: self.y * scale.y,
+		}
+	}
+}
+
+impl MulAssign<Vec2> for Vec2 {
+	#[inline]
+	fn mul_assign(&mut self, scale: Vec2) {
+		self.x *= scale.x;
+		self.y *= scale.y;
+	}
+}
+
 impl Div<i32> for Vec2 {
 	type Output = Self;
 
@@ -119,6 +140,27 @@ impl DivAssign<i32> for Vec2 {
 	fn div_assign(&mut self, scale: i32) {
 		self.x /= scale;
 		self.y /= scale;
+	}
+}
+
+impl Div<Vec2> for Vec2 {
+	type Output = Self;
+
+	#[inline]
+	#[must_use]
+	fn div(self, scale: Vec2) -> Self {
+		Self {
+			x: self.x / scale.x,
+			y: self.y / scale.y,
+		}
+	}
+}
+
+impl DivAssign<Vec2> for Vec2 {
+	#[inline]
+	fn div_assign(&mut self, scale: Vec2) {
+		self.x /= scale.x;
+		self.y /= scale.y;
 	}
 }
 
@@ -166,6 +208,24 @@ impl Vec2 {
 		Self {
 			x: self.x.abs(),
 			y: self.y.abs(),
+		}
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn min_components(self, other: Self) -> Self {
+		Self {
+			x: std::cmp::min(self.x, other.x),
+			y: std::cmp::min(self.y, other.y),
+		}
+	}
+
+	#[inline]
+	#[must_use]
+	pub fn max_components(self, other: Self) -> Self {
+		Self {
+			x: std::cmp::max(self.x, other.x),
+			y: std::cmp::max(self.y, other.y),
 		}
 	}
 }
