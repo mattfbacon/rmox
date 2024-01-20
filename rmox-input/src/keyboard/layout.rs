@@ -19,6 +19,10 @@ pub(crate) struct DefaultLayout;
 
 impl Layout for DefaultLayout {
 	/// `modifiers` is provided mutably so that any modifiers that act as accessors for alternate keys can be consumed.
+	// TODO: Do the layout-specific mapping here instead of in `resolve`.
+	// Refactor so `Key`s represent the logical key as mapped by the layout.
+	// i.e., we should also add `Key`s for stuff like brackets, symbols, etc.
+	// In that situation, the `Key` to `Resolved` algorithm should probably be layout-independent.
 	fn scancode_to_key(&self, scancode: Scancode, modifiers: &mut Modifiers) -> Option<Key> {
 		// We are using AltOpt as the accessor for alternative keys.
 		'alt: {

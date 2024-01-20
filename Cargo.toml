@@ -9,6 +9,7 @@ members = [
 
 	"bar-app",
 	"events-app",
+	"term-app",
 	"wallpaper-app",
 ]
 resolver = "2"

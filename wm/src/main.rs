@@ -627,9 +627,8 @@ impl Manager {
 						return;
 					}
 					Key::Enter if event.modifiers.opt() => {
-						tracing::trace!("M-enter, launching test app");
-						// TODO: When we implement a terminal, this should launch that instead.
-						match std::process::Command::new("/home/root/events-app")
+						tracing::trace!("M-enter, launching a terminal");
+						match std::process::Command::new("/home/root/term-app")
 							.env("RMOX_SOCKET", &self.state.config.control_socket)
 							.spawn()
 						{
@@ -639,7 +638,7 @@ impl Manager {
 								});
 							}
 							Err(error) => {
-								tracing::error!(?error, "error spawning events app");
+								tracing::error!(?error, "error spawning term app");
 							}
 						}
 					}
