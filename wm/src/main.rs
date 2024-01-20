@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 use tokio::{pin, select};
 use tokio_stream::StreamExt as _;
 
+// TODO: Make all child surfaces invisible and pause input on SIGSTOP (and resume on SIGCONT) so children stop rendering or doing anything.
+
 #[derive(Debug, Clone, Copy)]
 struct Surface {
 	description: SurfaceDescription,
