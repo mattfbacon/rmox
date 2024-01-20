@@ -5,7 +5,7 @@ use embedded_graphics::primitives::PointsIter as _;
 use rmox_common::eink_update::{EinkUpdateExt as _, UpdateStyle};
 use rmox_fb::Framebuffer;
 use rmox_protocol::client::recv::{Event, SurfaceEvent};
-use rmox_protocol::server::recv::{Command, SurfaceInit};
+use rmox_protocol::client::send::{Command, SurfaceInit};
 use tokio::pin;
 use tokio_stream::StreamExt as _;
 

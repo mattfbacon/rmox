@@ -11,7 +11,7 @@ use rmox_common::types::Rectangle;
 use rmox_fb::util::Scaled;
 use rmox_fb::Framebuffer;
 use rmox_protocol::client::recv::{Event, SurfaceEvent};
-use rmox_protocol::server::recv::{Command, SurfaceInit};
+use rmox_protocol::client::send::{Command, SurfaceInit};
 use tokio::pin;
 use tokio_stream::StreamExt as _;
 
